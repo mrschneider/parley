@@ -1,0 +1,114 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "parley",
+  "scopeName": "source.parley",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#msgref" },
+    { "include": "#decl" },
+    { "include": "#header" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#number" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.parley",
+      "match": "#.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.parley",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.parley", "match": "\\\\." }
+      ]
+    },
+    "msgref": {
+      "name": "variable.other.reference.parley",
+      "match": "@msg\\d+"
+    },
+    "decl": {
+      "patterns": [
+        {
+          "match": "\\b(AGENT|agent)\\b\\s+\"([^\"]+)\"\\s+\\b(as|AS)\\b\\s+([A-Za-z_][\\w-]*)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.parley" },
+            "2": { "name": "entity.name.function.parley" },
+            "3": { "name": "keyword.control.declaration.parley" },
+            "4": { "name": "entity.name.type.alias.parley" }
+          }
+        },
+        {
+          "match": "\\b(PROVIDES|provides)\\b\\s+\"?([a-z0-9_.]+)\"?\\s+\\bv(\\d+)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.parley" },
+            "2": { "name": "entity.name.function.parley" },
+            "3": { "name": "keyword.other.version.parley" },
+            "4": { "name": "constant.numeric.parley" }
+          }
+        },
+        {
+          "match": "\\b(INPUT|OUTPUT|input|output)\\b\\s+(\\w+)\\s*:\\s*(\\w+)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.parley" },
+            "2": { "name": "variable.parameter.parley" },
+            "3": { "name": "storage.type.parley" }
+          }
+        },
+        {
+          "match": "\\b(COST|cost)\\b\\s+(\\w+)\\s*(<=|>=|==|<|>)\\s*(.+)$",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.parley" },
+            "2": { "name": "variable.parameter.parley" },
+            "3": { "name": "keyword.operator.comparison.parley" },
+            "4": { "name": "constant.numeric.parley" }
+          }
+        },
+        {
+          "match": "\\b(DEFAULT_CONFIDENCE|default_confidence)\\b\\s+([0-9.]+)",
+          "captures": {
+            "1": { "name": "keyword.control.declaration.parley" },
+            "2": { "name": "constant.numeric.parley" }
+          }
+        }
+      ]
+    },
+    "header": {
+      "match": "\\b([A-Za-z_][\\w-]*)\\s*->\\s*([A-Za-z_][\\w-]*)",
+      "captures": {
+        "1": { "name": "entity.name.type.alias.parley" },
+        "2": { "name": "entity.name.type.alias.parley" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.act.parley",
+          "match": "\\b(inform|ask|request|propose|accept|reject|counter|commit|delegate|verify|cancel)\\b"
+        },
+        {
+          "name": "keyword.control.parley",
+          "match": "\\b(intent|with|by|note|confidence|tenant|parent|provenance|fallback|expect|clauses)\\b"
+        },
+        {
+          "name": "keyword.other.weight.parley",
+          "match": "\\bw\\b(?=\\s+[0-9])"
+        },
+        {
+          "name": "keyword.other.nl.parley",
+          "match": "\\bnl\\b(?=\\s+\"|\\s+[^\\s\"\\w])"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.comparison.parley",
+      "match": "(<=|>=|==|<|>|=|~|in|not_null)"
+    },
+    "number": {
+      "name": "constant.numeric.parley",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    }
+  }
+}

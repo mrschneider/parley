@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.vscode/
+.idea/
+node_modules/
+sdk/go/parleygo
+sdk/go/demo/parleydemo

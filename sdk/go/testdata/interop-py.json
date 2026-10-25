@@ -1,0 +1,117 @@
+[
+  {
+    "v": 0,
+    "from": {
+      "id": "planner-42"
+    },
+    "to": {
+      "id": "dispatcher-7"
+    },
+    "ts": "2026-10-23T04:21:01Z",
+    "act": "request",
+    "target": "route.plan",
+    "intent": "Preciso da rota mais rápida, o usuário está apressado",
+    "body": {
+      "origin": "Lisboa",
+      "dest": "Porto"
+    },
+    "deadline": "2026-10-22T15:00:00Z",
+    "tenant": "acme",
+    "expect": [
+      {
+        "check": {
+          "field": "confidence",
+          "op": "gt",
+          "value": 0.85
+        },
+        "weight": 1.0,
+        "id": "c1"
+      },
+      {
+        "check": {
+          "field": "route.eta_min",
+          "op": "lte",
+          "value": 150
+        },
+        "weight": 1.0,
+        "id": "c2"
+      },
+      {
+        "nl": "Rota deve evitar estradas com obras anunciadas nas próximas 24h",
+        "weight": 0.9,
+        "id": "c3"
+      }
+    ],
+    "fallback": {
+      "to": {
+        "id": "dispatcher-backup"
+      }
+    },
+    "id": "msg:b4e9f9660d1e51b7",
+    "signature": {
+      "alg": "ed25519",
+      "key": "parley-test:planner-42",
+      "sig": "yVQvm2iEDpDDZPiwh1NHBFs6qLRa4NAvkDvSJt2si/1MPa9u4HX6P/BIIa+DbAuYKADAHE7QHIX41B4Rf6MXAQ=="
+    }
+  },
+  {
+    "v": 0,
+    "from": {
+      "id": "dispatcher-7"
+    },
+    "to": {
+      "id": "planner-42"
+    },
+    "ts": "2026-10-23T04:21:01Z",
+    "act": "propose",
+    "target": "route.plan",
+    "parent": "msg:b4e9f9660d1e51b7",
+    "body": {
+      "route": {
+        "eta_min": 142,
+        "stops": [
+          "Lisboa",
+          "Coimbra",
+          "Viseu",
+          "Porto"
+        ]
+      },
+      "cost_eur": 1.4
+    },
+    "confidence": 0.93,
+    "note": "Viseu tem obra; rota alternativa por Aveiro é +40 min",
+    "tenant": "acme",
+    "id": "msg:8a282ace84eb622c",
+    "signature": {
+      "alg": "ed25519",
+      "key": "parley-test:dispatcher-7",
+      "sig": "7BV0VveBsS2pUREJXliwjvSJ7Zk6xMqBpSv+iwupnBRNZPKWeVoInsU8x/07FgJGHAO8ASS4vSR3RiDM6QE6Ag=="
+    }
+  },
+  {
+    "v": 0,
+    "from": {
+      "id": "planner-42"
+    },
+    "to": {
+      "id": "dispatcher-7"
+    },
+    "ts": "2026-10-23T04:21:01Z",
+    "act": "accept",
+    "target": "route.plan",
+    "clauses": [
+      "c3"
+    ],
+    "provenance": [
+      "msg:b4e9f9660d1e51b7",
+      "msg:8a282ace84eb622c"
+    ],
+    "tenant": "acme",
+    "id": "msg:bb8bc7dd919e7b09",
+    "signature": {
+      "alg": "ed25519",
+      "key": "parley-test:planner-42",
+      "sig": "eUWzT412Pikg+PGVDx0BExenam83rSEKN6046tyVn3TXDCe4Zun5HF+FGgLVtjrjNgmdKMAL7poH9IrsZjcKDQ=="
+    }
+  }
+]

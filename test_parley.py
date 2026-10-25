@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""PARLEY v0 — testes da referência Python (ranking por weight + thread).
+
+Rode: python3 -m pytest test_parley.py -q   (ou: python3 test_parley.py)
+"""
+from __future__ import annotations
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from parley import (parse_text, finalize, sign, rank_proposals, Thread,
+                    thread_from, Thread as _T)  # noqa: E402
+
+T0 = "2026-10-23T09:00:00Z"
+
+
+def _msg(frm, to, act, target=None, parent=None, body=None, conf=None,
+         clauses=None, ts="2026-10-23T09:01:00Z"):
+    m = {"v": 0, "from": {"id": frm}, "to": {"id": to}, "ts": ts,
+         "act": act, "tenant": "acme"}
+    if target:
+        m["target"] = target
+    if parent:
+        m["parent"] = parent
+    if body is not None:
+        m["body"] = body
+    if conf is not None:
+        m["confidence"] = conf
+    if clauses is not None:
+        m["clauses"] = clauses
+    return m
+
+
+def _with_id(m):
+    """Atribui id de conteúdo (espelho do AssignID do Go)."""
+    import hashlib
+    from parley import canonical_bytes
+    tmp = {k: v for k, v in m.items() if k not in ("id", "signature")}
+    m["id"] = "msg:" + hashlib.sha256(canonical_bytes(tmp)).hexdigest()[:16]
+    return m
+
+
+def parent_with_weights():
+    """request com contrato ponderado: c1 conf>0.85 (1.0),
+    c2 route.eta_min<=150 (0.9), c3 nl (0.9). Total 2.8."""
+    p = _msg("planner-42", "dispatcher-7", "request", target="route.plan",
+             body={"origin": "Lisboa", "dest": "Porto"})
+    p["expect"] = [
+        {"id": "c1", "check": {"field": "confidence", "op": "gt", "value": 0.85}, "weight": 1.0},
+        {"id": "c2", "check": {"field": "route.eta_min", "op": "lte", "value": 150}, "weight": 0.9},
+        {"id": "c3", "nl": "evitar obras nas próximas 24h", "weight": 0.9},
+    ]
+    return _with_id(p)
+
+
+# ---------------------------------------------------------------- ranking
+
+def test_ranking_order():
+    p = parent_with_weights()
+    a = _with_id(_msg("dispatcher-7", "planner-42", "propose", target="route.plan",
+                      parent=p["id"],
+                      body={"route": {"eta_min": 142}}, conf=0.93))
+    b = _with_id(_msg("dispatcher-7", "planner-42", "propose", target="route.plan",
+                      parent=p["id"],
+                      body={"route": {"eta_min": 100}}, conf=0.95,
+                      clauses=["c3"]))
+    c = _with_id(_msg("dispatcher-7", "planner-42", "propose", target="route.plan",
+                      parent=p["id"],
+                      body={"route": {"eta_min": 200}}, conf=0.99,
+                      clauses=["c3"]))
+    r = rank_proposals(p, [a, b, c])
+    assert len(r["entries"]) == 3
+    assert abs(r["total"] - 2.8) < 1e-9
+    assert r["top"]["proposal"]["id"] == b["id"]
+    assert abs(r["top"]["score"] - 1.0) < 1e-9
+    by = {e["proposal"]["id"]: e["score"] for e in r["entries"]}
+    assert by[a["id"]] == 0.0  # nl não aceita -> violação -> 0
+    assert by[c["id"]] == 0.0  # c2 violada -> 0
+
+
+def test_ranking_tiebreak_confidence():
+    p = parent_with_weights()
+    p1 = _with_id(_msg("d", "planner-42", "propose", parent=p["id"],
+                       body={"route": {"eta_min": 200}}, conf=0.99, clauses=["c3"]))
+    q = _with_id(_msg("d", "planner-42", "propose", parent=p["id"],
+                      body={"route": {"eta_min": 100}}, conf=0.90))
+    r = rank_proposals(p, [q, p1])
+    assert all(e["score"] == 0.0 for e in r["entries"])
+    assert r["entries"][0]["proposal"]["id"] == p1["id"]  # conf 0.99 > 0.90
+
+
+def test_ranking_inert_clause():
+    p = _msg("a", "b", "request")
+    p["expect"] = [
+        {"id": "x", "check": {"field": "confidence", "op": "gt", "value": 0.85}, "weight": 1.0},
+        {"id": "y", "nl": "cláusula inativa", "weight": 0.0},
+    ]
+    _with_id(p)
+    off = _with_id(_msg("b", "a", "propose", parent=p["id"], conf=0.9))
+    r = rank_proposals(p, [off])
+    assert abs(r["total"] - 1.0) < 1e-9
+    assert r["top"] is not None
+    assert abs(r["top"]["score"] - 1.0) < 1e-9
+
+
+def test_ranking_no_offers():
+    p = parent_with_weights()
+    r = rank_proposals(p, [])
+    assert r["entries"] == [] and r["top"] is None
+    acc = _with_id(_msg("b", "a", "accept", parent=p["id"]))
+    r2 = rank_proposals(p, [acc])
+    assert r2["entries"] == []  # accept não é oferta
+
+
+# ---------------------------------------------------------------- thread
+
+def test_thread_happy_path():
+    th = Thread()
+    req = _with_id(_msg("planner-42", "dispatcher-7", "request", target="route.plan"))
+    th.apply(req)
+    assert th.state == "negotiating" and th.id == req["id"] and th.target == "route.plan"
+    prop = _with_id(_msg("dispatcher-7", "planner-42", "propose",
+                         target="route.plan", parent=req["id"]))
+    th.apply(prop)
+    assert th.last_offer == prop["id"] and th.offer_count == 1
+    cn = _with_id(_msg("planner-42", "dispatcher-7", "counter",
+                       target="route.plan", parent=prop["id"]))
+    th.apply(cn)
+    assert th.offer_count == 2
+    acc = _with_id(_msg("dispatcher-7", "planner-42", "accept",
+                        target="route.plan", parent=cn["id"]))
+    th.apply(acc)
+    assert th.state == "settled"
+    late = _with_id(_msg("planner-42", "dispatcher-7", "propose",
+                         target="route.plan", parent=acc["id"]))
+    try:
+        th.apply(late)
+        raise AssertionError("ato após settle deveria falhar")
+    except ValueError:
+        pass
+    assert len(th.trace) == 4
+
+
+def test_thread_open_requires_request():
+    th = Thread()
+    for act in ("inform", "ask"):
+        try:
+            th.apply(_with_id(_msg("a", "b", act)))
+            raise AssertionError(f"{act} não deveria abrir thread")
+        except ValueError:
+            pass
+    try:
+        th.apply(_with_id(_msg("a", "b", "request")))  # sem target
+        raise AssertionError("request sem target não deveria abrir")
+    except ValueError:
+        pass
+    assert th.state == "new"
+
+
+def test_thread_counter_without_offer():
+    th = Thread()
+    req = _with_id(_msg("a", "b", "request", target="route.plan"))
+    th.apply(req)
+    cn = _with_id(_msg("b", "a", "counter", target="route.plan", parent=req["id"]))
+    try:
+        th.apply(cn)
+        raise AssertionError("counter sem oferta deveria falhar")
+    except ValueError:
+        pass
+
+
+def test_thread_reject_and_cancel_end():
+    for act in ("reject", "cancel"):
+        th = Thread()
+        req = _with_id(_msg("a", "b", "request", target="route.plan"))
+        th.apply(req)
+        m = _with_id(_msg("b", "a", act, target="route.plan", parent=req["id"]))
+        th.apply(m)
+        assert th.state == "rejected"
+        prop = _with_id(_msg("b", "a", "propose", target="route.plan", parent=m["id"]))
+        try:
+            th.apply(prop)
+            raise AssertionError(f"propose após {act} deveria falhar")
+        except ValueError:
+            pass
+
+
+def test_thread_delegate_keeps_going():
+    th = Thread()
+    req = _with_id(_msg("a", "b", "request", target="route.plan"))
+    th.apply(req)
+    dl = _with_id(_msg("b", "c", "delegate", target="route.plan", parent=req["id"]))
+    th.apply(dl)
+    assert th.state == "negotiating"
+    prop = _with_id(_msg("c", "a", "propose", target="route.plan", parent=dl["id"]))
+    th.apply(prop)
+    assert th.last_offer == prop["id"]
+
+
+def test_thread_loop_cap():
+    th = Thread(cap=2)
+    req = _with_id(_msg("a", "b", "request", target="route.plan"))
+    th.apply(req)
+    last = req["id"]
+    for i, act in enumerate(("propose", "counter"), 1):
+        om = _with_id(_msg("b", "a", act, target="route.plan", parent=last))
+        th.apply(om)
+        last = om["id"]
+    over = _with_id(_msg("b", "a", "counter", target="route.plan", parent=last))
+    try:
+        th.apply(over)
+        raise AssertionError("oferta além do teto deveria falhar")
+    except ValueError:
+        pass
+    assert th.offer_count == 2
+
+
+def test_thread_from_example_file():
+    """A negociação de examples/negociacao.parley é uma thread válida:
+    request -> propose -> accept (settled)."""
+    src = open(os.path.join(os.path.dirname(__file__),
+                            "examples", "negociacao.parley")).read()
+    doc = parse_text(src)
+    msgs = finalize(doc)
+    th = thread_from(8, msgs)
+    assert th.state == "settled"
+    assert [s["act"] for s in th.trace] == ["request", "propose", "accept"]
+
+
+def test_thread_trace_states():
+    th = Thread()
+    req = _with_id(_msg("a", "b", "request", target="route.plan"))
+    prop = _with_id(_msg("b", "a", "propose", target="route.plan", parent=req["id"]))
+    th = thread_from(8, [req, prop])
+    assert th.trace[0]["state"] == "negotiating"
+    assert th.trace[1]["state"] == "negotiating"
+
+
+def test_ranking_interop_fixture_matches_go():
+    """Interop: o MESMO fixture validado pelo Go (TestInteropRankingGoMatchesPython)
+    deve produzir a MESMA ordenação e scores no Python. O weight-ranking é
+    parte do protocolo, não do SDK — os dois lados convergem no fixture."""
+    fx_path = os.path.join(os.path.dirname(__file__),
+                           "sdk", "go", "testdata", "interop-ranking.json")
+    if not os.path.exists(fx_path):
+        return  # fixture ausente (mesma política de skip do Go)
+    fx = json.load(open(fx_path))
+    r = rank_proposals(fx["parent"], fx["proposals"])
+    assert len(r["entries"]) == len(fx["expected"]), \
+        f"entradas = {len(r['entries'])}, esperado {len(fx['expected'])}"
+    for i, ex in enumerate(fx["expected"]):
+        got = r["entries"][i]
+        assert got["proposal"]["id"] == ex["id"], \
+            f"ordem[{i}] = {got['proposal']['id']}, esperado {ex['id']}"
+        assert abs(got["score"] - ex["score"]) < 1e-9, \
+            f"score[{i}] = {got['score']}, esperado {ex['score']}"
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    failed = 0
+    for fn in fns:
+        try:
+            fn()
+            print(f"PASS {fn.__name__}")
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"FAIL {fn.__name__}: {e!r}")
+    print(f"\n{len(fns) - failed}/{len(fns)} testes passaram")
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

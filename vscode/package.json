@@ -1,0 +1,36 @@
+{
+  "name": "parley",
+  "displayName": "PARLEY",
+  "description": "Linguagem/protocolo PARLEY v0 para comunicação entre agentes de IA: sintaxe, LSP e snippets.",
+  "version": "0.1.0",
+  "publisher": "parley",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Other"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "parley",
+        "aliases": ["PARLEY", "parley"],
+        "extensions": [".parley"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "parley",
+        "scopeName": "source.parley",
+        "path": "./syntaxes/parley.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "parley",
+        "path": "./snippets/parley.json"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

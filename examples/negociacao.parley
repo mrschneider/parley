@@ -1,0 +1,40 @@
+# PARLEY v0 — exemplo: negociação de rota com contrato híbrido
+# (cláusula de máquina 'check' + cláusula em linguagem natural 'nl')
+
+agent "planner-42" as PLANNER
+agent "dispatcher-backup" as BACKUP
+agent "dispatcher-7" as DISPATCHER
+provides "route.plan" v1
+  input  origin : Location
+  input  dest   : Location
+  output route  : Route
+  cost   latency_ms <= 200
+  default_confidence 0.9
+
+# --- 1) Pedido com contrato (NL + estruturado) -----------------------------
+PLANNER -> DISPATCHER
+  request route.plan
+  intent "Preciso da rota mais rápida, o usuário está apressado"
+  with origin = "Lisboa", dest = "Porto"
+  by 2026-10-22T15:00:00Z
+  tenant "acme"
+  expect confidence > 0.85
+  expect route.eta_min <= 150
+  expect nl "Rota deve evitar estradas com obras anunciadas nas próximas 24h" w 0.9
+  fallback -> "dispatcher-backup"
+
+# --- 2) Proposta (contra-oferta) --------------------------------------------
+DISPATCHER -> PLANNER
+  propose route.plan
+  parent "@msg1"
+  with route = {"eta_min": 142, "stops": ["Lisboa", "Coimbra", "Viseu", "Porto"]}, cost_eur = 1.40
+  confidence 0.93
+  note "Viseu tem obra; rota alternativa por Aveiro é +40 min"
+  tenant "acme"
+
+# --- 3) Aceite seletivo: aceita a cláusula NL, rejeita silêncio ----------------
+PLANNER -> DISPATCHER
+  accept route.plan
+  clauses "c3"
+  provenance "@msg1", "@msg2"
+  tenant "acme"

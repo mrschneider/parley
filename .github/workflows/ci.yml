@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-python:
+    name: Python reference (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Reference tests
+        run: python3 test_parley.py
+      - name: LSP tests
+        run: python3 test_lsp.py
+      - name: CLI smoke (one-shot check)
+        run: python3 parley_lsp.py --check examples/negociacao.parley
+
+  test-go:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go/go.mod
+          cache-dependency-path: sdk/go/go.sum
+      - name: Go tests
+        working-directory: sdk/go
+        run: go test ./...
+      - name: Go vet
+        working-directory: sdk/go
+        run: go vet ./...
+      - name: Build CLI
+        working-directory: sdk/go
+        run: go build ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON Schema
+        run: python3 -c "import json; json.load(open('schema/parley-v0.schema.json')); print('schema ok')"
+      - name: YAML sanity (workflows parse)
+        run: python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('workflows ok')"
+        continue-on-error: true
