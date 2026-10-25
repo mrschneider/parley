@@ -13,11 +13,16 @@ import (
 )
 
 //go:embed schema/parley-v0.schema.json
-var schemaJSON []byte
+var schemaV0JSON []byte
+
+//go:embed schema/parley-v1.schema.json
+var schemaV1JSON []byte
 
 var (
-	schemaOnce sync.Once
-	schema     *jsonschema.Schema
+	schemaOnce   sync.Once
+	schemaV0     *jsonschema.Schema
+	schemaV1     *jsonschema.Schema
+	schemaLoadEr error
 )
 
 // Validate checks a message the same way the Python reference does:
@@ -114,12 +119,49 @@ func isContractAct(act string) bool {
 	return false
 }
 
-// CheckClause evaluates one 'check' clause against a message.
+// CheckClause evaluates one 'check' clause against a message. It supports
+// v0 leaf checks and v1 all_of/any_of compositions (which may be combined).
 func CheckClause(cl Clause, m *Message) (bool, string) {
 	if cl.Check == nil {
 		return true, "nl (sem verificação de máquina)"
 	}
-	chk := cl.Check
+	return checkAny(*cl.Check, m)
+}
+
+func checkAny(chk Check, m *Message) (bool, string) {
+	var allResults, anyResults []string
+	allOK, anyOK := true, false
+	anyPresent := false
+	for _, child := range chk.AllOf {
+		ok, detail := checkAny(child, m)
+		allResults = append(allResults, detail)
+		if !ok {
+			allOK = false
+		}
+	}
+	if len(chk.AllOf) > 0 {
+		anyPresent = true
+	}
+	for _, child := range chk.AnyOf {
+		ok, detail := checkAny(child, m)
+		anyResults = append(anyResults, detail)
+		if ok {
+			anyOK = true
+		}
+	}
+	if len(chk.AnyOf) > 0 {
+		anyPresent = true
+	}
+	if anyPresent {
+		// Composite form: both groups (when present) must hold.
+		compositeOK := allOK && (len(chk.AnyOf) == 0 || anyOK)
+		detail := fmt.Sprintf("all_of=%v any_of=%v", allResults, anyResults)
+		return compositeOK, detail
+	}
+	return checkLeaf(chk, m)
+}
+
+func checkLeaf(chk Check, m *Message) (bool, string) {
 	var actual any
 	if chk.Field == "confidence" {
 		if m.Confidence != nil {
@@ -208,7 +250,7 @@ func checkSchema(m *Message, out map[string]any) bool {
 		out["schema_error"] = "unmarshal: " + err.Error()
 		return false
 	}
-	if err := schemaValidateErr(parsed); err != nil {
+	if err := schemaValidateErr(parsed, m.V); err != nil {
 		out["schema_ok"] = false
 		out["schema_error"] = err.Error()
 		return false
@@ -217,42 +259,76 @@ func checkSchema(m *Message, out map[string]any) bool {
 	return true
 }
 
-func schemaValidateErr(v any) error {
-	schemaOnce.Do(loadSchema)
-	if err := schema.Validate(v); err != nil {
+func schemaValidateErr(v any, version int) error {
+	loadSchemas()
+	if version <= 0 {
+		if err := schemaV0.Validate(v); err != nil {
+			return err
+		}
+		return nil
+	}
+	if version > 1 {
+		return fmt.Errorf("versão de protocolo não suportada: %d", version)
+	}
+	if err := schemaV1.Validate(v); err != nil {
 		return err
 	}
 	return nil
 }
 
-// schemaValid reports whether v validates against the canonical v0 schema.
+// schemaValid reports whether v validates against the canonical schema for
+// its v field (defaults to v0 for non-map/raw test values).
 func schemaValid(v any) bool {
-	return schemaValidateErr(v) == nil
+	version := 0
+	if obj, ok := v.(map[string]any); ok {
+		switch n := obj["v"].(type) {
+		case float64:
+			version = int(n)
+		case int64:
+			version = int(n)
+		case int:
+			version = n
+		}
+	}
+	return schemaValidateErr(v, version) == nil
 }
 
 // SchemaValid reports whether a raw JSON value validates against the
-// canonical v0 schema (exported for tests / cross-checks).
+// canonical schema selected by its v field (exported for tests /
+// cross-checks).
 func SchemaValid(v any) bool {
 	return schemaValid(v)
 }
 
-func loadSchema() {
-	var sch map[string]any
-	if err := json.Unmarshal(schemaJSON, &sch); err != nil {
-		panic("parley: schema: " + err.Error())
-	}
-	compiler := jsonschema.NewCompiler()
-	// Python's jsonschema does NOT enforce 'format' by default, and this
-	// library only asserts formats when AssertFormat() is called (it is
-	// not) — so date-time 'format' is descriptive only, matching Python.
-	if err := compiler.AddResource("https://example.org/parley/v0/message.schema.json", sch); err != nil {
-		panic("parley: schema resource: " + err.Error())
-	}
-	s, err := compiler.Compile("https://example.org/parley/v0/message.schema.json")
-	if err != nil {
-		panic("parley: schema: " + err.Error())
-	}
-	schema = s
+// SchemaValidateError exposes the canonical schema error for diagnostics.
+// Version <=0 selects v0; only 0 and 1 are currently supported.
+func SchemaValidateError(v any, version int) error {
+	return schemaValidateErr(v, version)
+}
+
+func loadSchemas() {
+	schemaOnce.Do(func() {
+		compile := func(raw []byte, id string) *jsonschema.Schema {
+			var sch map[string]any
+			if err := json.Unmarshal(raw, &sch); err != nil {
+				panic("parley: schema: " + err.Error())
+			}
+			compiler := jsonschema.NewCompiler()
+			// Python's jsonschema does NOT enforce 'format' by default, and
+			// this library only asserts formats when AssertFormat() is called
+			// (it is not) — so date-time 'format' is descriptive only.
+			if err := compiler.AddResource(id, sch); err != nil {
+				panic("parley: schema resource: " + err.Error())
+			}
+			s, err := compiler.Compile(id)
+			if err != nil {
+				panic("parley: schema: " + err.Error())
+			}
+			return s
+		}
+		schemaV0 = compile(schemaV0JSON, "https://example.org/parley/v0/message.schema.json")
+		schemaV1 = compile(schemaV1JSON, "https://example.org/parley/v1/message.schema.json")
+	})
 }
 
 // fmtFloat formats a float the way Python's repr does (1.0 -> "1", 0.93 -> "0.93").

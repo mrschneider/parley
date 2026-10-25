@@ -27,11 +27,11 @@ import "sort"
 
 // RankEntry é uma proposta avaliada contra o contrato do pedido.
 type RankEntry struct {
-	Proposal   *Message       `json:"proposal"`
-	Score      float64        `json:"score"`
-	Satisfied  []string       `json:"satisfied,omitempty"`  // ids de cláusula creditadas
-	Violations []string       `json:"violations,omitempty"` // ids de cláusula penalizadas
-	Detail     []map[string]any `json:"detail"`             // avaliação cláusula a cláusula
+	Proposal   *Message         `json:"proposal"`
+	Score      float64          `json:"score"`
+	Satisfied  []string         `json:"satisfied,omitempty"`  // ids de cláusula creditadas
+	Violations []string         `json:"violations,omitempty"` // ids de cláusula penalizadas
+	Detail     []map[string]any `json:"detail"`               // avaliação cláusula a cláusula
 }
 
 // Ranking é o resultado da ordenação.

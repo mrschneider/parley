@@ -5,26 +5,42 @@ negociação com contratos híbridos (cláusulas de máquina + linguagem natural
 multi-tenant, agnóstico de transporte (HTTP, WebSocket, filas).
 
 A serialização canônica JSON **é** o protocolo: qualquer plataforma que leia
-`schema/parley-v0.schema.json` fala PARLEY.
+`schema/parley-v0.schema.json` (ou `schema/parley-v1.schema.json`, que adiciona
+cláusulas compostas `all_of`/`any_of`) fala PARLEY.
 
 ## Modelo de confiança (agentes NÃO confiáveis)
 
 - **id de mensagem por conteúdo** (`msg:` + sha256 da serialização canônica) →
   idempotência e detecção de replay
 - **assinatura** sobre a serialização canônica (todo campo exceto `signature`),
-  ed25519 (testes derivam chave do id; produção: KMS/carteira real)
+  ed25519
+  - **modo teste**: a chave é derivada do id (conveniente, NÃO seguro —
+    qualquer um que conheça o id forja a assinatura)
+  - **modo produção**: `KeyStore` (Python e Go) gera/carrega pares ed25519
+    reais; a pública vai para o **Agent Card** publicado no **Registry**, e o
+    receptor verifica via `card.Pub` (`Registry.VerifyMessageWithCard`) —
+    a âncora de confiança é o card registrado, não a derivação
 - **tenant** no envelope, exigível pelo validador
-- **provenance**: cadeia de ids que fundamentam a mensagem
+- **provenance**: cadeia de ids que fundamenta a mensagem (usada também
+  para filiação de `accept` sem `parent` explícito)
 
 ## Contratos híbridos
 
 - cláusula `check` — validada por máquina (caminho no body, operador, valor)
-- cláusula `nl` — escrita em linguagem natural; só fica **VINCULANTE** quando o
+- **v1**: `check` também aceita composição — `all_of` (E) e `any_of` (OU)
+  recursivamente sobre folhas (`schema/parley-v1.schema.json`); v0 rejeita
+  composição explicitamente
+- cláusula `nl` — escrita em linguagem natural; só fica **VINCULANTE** quando a
   contraparte a lista explicitamente em `accept ... clauses "cN"`
 - **ranking por peso** (`clause.weight`): dado um `request` com `expect`
   ponderadas e as propostas recebidas, `rank_proposals` ordena pela fração de
   peso contratual satisfeita. O ranking **orienta**, o requestor decide.
   Semântica idêntica em Python (referência) e Go.
+- **acordo materializado** (`build_agreement`/`BuildAgreement`): ao assentar,
+  a negociação vira um recibo canônico de conteúdo endereçado (`agreement:` +
+  sha256) com vencedor, corpo aceito e cláusulas binding — assinado por
+  requestor **e** provider, verificável sem replayer a thread (Go: ver
+  `agreement.go`; Python: `build_agreement`/`sign_agreement`/`verify_agreement`)
 
 ## Linguagem
 
@@ -53,13 +69,32 @@ Veja `examples/negociacao.parley` (request → propose → accept seletivo).
 
 | Caminho | O que é |
 |---|---|
-| `parley.py` | Referência Python: parser, canonical JSON, assinatura, validação, ranking, thread |
+| `parley.py` | Referência Python: parser, canonical JSON, assinatura, `KeyStore` (ed25519 real), validação (v0/v1), ranking, thread, acordos |
 | `parley_lsp.py` | **LSP** para `.parley` (zero deps, stdio) + `--check` one-shot |
-| `test_parley.py` | Testes da referência Python (13) |
+| `test_parley.py` | Testes da referência Python (16) |
 | `test_lsp.py` | Testes do LSP com cliente JSON-RPC real (7) |
-| `schema/parley-v0.schema.json` | JSON Schema da mensagem canônica |
-| `sdk/go/` | SDK Go (parser, validação, ranking, registry, state, transport) |
+| `schema/parley-v0.schema.json` | JSON Schema da mensagem canônica (v0) |
+| `schema/parley-v1.schema.json` | v1: adiciona `check` composto (`all_of`/`any_of`) |
+| `sdk/go/` | SDK Go: parser, validação, ranking, registry, state, keystore, agreement, transports |
+| `sdk/go/transport/` | Queue + HTTP + **WebSocket** (gorilla), Inbox (retenção), Supervisor (deadline/fallback) |
 | `vscode/` | Extensão VS Code: syntax highlighting, LSP, snippets |
+
+## Runtime de produção (Go)
+
+Os três pilares se conectam num caminho único (verificado em
+`transport/runtime_test.go` e no demo `go run ./demo`):
+
+1. **KeyStore** gera/carrega pares ed25519 reais (arquivo JSON, chmod 0600);
+2. **Registry** publica o Agent Card assinado e serve de âncora de confiança
+   (`WithCardRegistry` no Inbox);
+3. **Supervisor** vigia deadline/fallback e o `CompleteFallbackSink`
+   re-alvoa, re-assina e entrega a escalada automaticamente;
+4. **Agreement** materializa o desfecho assinado por ambos os lados.
+
+Persistência: escritas são **atômicas e serializadas entre processos**
+(`AtomicWriteFile`/`lockedWrite` — lock-irmão `.lock` + temp/rename).
+Inbox aceita política de retenção (`WithRetention(maxAge, maxRecords)`), com
+evolução automática após cada entrega e `Sweep()` manual.
 
 ## Badges
 

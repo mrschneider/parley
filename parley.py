@@ -18,9 +18,12 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
+from typing import Any
 
 # ---------------------------------------------------------------- ed25519 / hmac
 try:
@@ -37,6 +40,87 @@ def _derive_key(agent_id: str, tenant: str = "default"):
     if _HAVE_ED25519:
         return ("ed25519", Ed25519PrivateKey.from_private_bytes(seed))
     return ("hmac-sha256", seed)
+
+class KeyStore:
+    """Carteira de chaves ed25519 reais (caminho de produção).
+
+    O arquivo guarda a seed privada e deve ter permissão 0600: quem tem o
+    arquivo TEM a identidade do agente. Em produção, o caminho ideal vive
+    em disco criptografado/secret manager — o formato é o mesmo."""
+    ALG = "ed25519"
+
+    def __init__(self):
+        self._keys: dict[tuple[str, str], Ed25519PrivateKey] = {}
+
+    @staticmethod
+    def _key(tenant: str, agent_id: str) -> tuple[str, str]:
+        return (tenant or "default", agent_id)
+
+    def generate(self, agent_id: str, tenant: str = "default") -> Ed25519PrivateKey:
+        if not _HAVE_ED25519:
+            raise RuntimeError("cryptography não disponível para ed25519")
+        key = Ed25519PrivateKey.generate()  # type: ignore[misc]
+        self._keys[self._key(tenant, agent_id)] = key
+        return key
+
+    def put(self, agent_id: str, tenant: str, key: Ed25519PrivateKey) -> None:
+        self._keys[self._key(tenant, agent_id)] = key
+
+    def get(self, agent_id: str, tenant: str = "default"):
+        return self._keys.get(self._key(tenant, agent_id))
+
+    def public_bytes(self, agent_id: str, tenant: str = "default") -> str:
+        key = self.get(agent_id, tenant)
+        if key is None:
+            raise KeyError(f"chave ausente: {tenant}/{agent_id}")
+        if not _HAVE_ED25519:
+            raise RuntimeError("cryptography não disponível para ed25519")
+        pub = key.public_key().public_bytes(
+            serialization.Encoding.Raw,  # type: ignore[misc]
+            serialization.PublicFormat.Raw)  # type: ignore[misc]
+        return base64.b64encode(pub).decode()
+
+    def sign_message(self, msg: dict, agent_id: str, tenant: str = "default") -> dict:
+        key = self.get(agent_id, tenant)
+        if key is None:
+            raise KeyError(f"chave ausente: {tenant}/{agent_id}")
+        out = dict(msg)
+        out["signature"] = {
+            "alg": self.ALG,
+            "key": self.public_bytes(agent_id, tenant),
+            "sig": base64.b64encode(key.sign(canonical_bytes(msg))).decode(),
+        }
+        return out
+
+    def save(self, path: str) -> None:
+        if not _HAVE_ED25519:
+            raise RuntimeError("cryptography não disponível para ed25519")
+        entries = []
+        for (tenant, agent), key in sorted(self._keys.items()):
+            seed = key.private_bytes(
+                serialization.Encoding.Raw,  # type: ignore[misc]
+                serialization.PrivateFormat.Raw,  # type: ignore[misc]
+                serialization.NoEncryption())  # type: ignore[misc]
+            pub = key.public_key().public_bytes(
+                serialization.Encoding.Raw,  # type: ignore[misc]
+                serialization.PublicFormat.Raw)  # type: ignore[misc]
+            entries.append({"agent": agent, "tenant": tenant, "alg": self.ALG,
+                            "seed_b64": base64.b64encode(seed).decode(),
+                            "pub_key_b64": base64.b64encode(pub).decode()})
+        atomic_write_json(path, entries, mode=0o600)
+
+    def load(self, path: str) -> None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                entries = json.load(f)
+        except FileNotFoundError:
+            return
+        if not _HAVE_ED25519:
+            raise RuntimeError("cryptography não disponível para ed25519")
+        for e in entries:
+            seed = base64.b64decode(e["seed_b64"])
+            self._keys[self._key(e.get("tenant", "default"), e["agent"])] = \
+                Ed25519PrivateKey.from_private_bytes(seed)  # type: ignore[misc]
 
 # ---------------------------------------------------------------- serialização
 #
@@ -75,6 +159,44 @@ def canonical_bytes(msg: dict) -> bytes:
     body = {k: v for k, v in msg.items() if k != "signature"}
     return canonical_json(body).encode("utf-8")
 
+def atomic_write_json(path: str, value, mode: int = 0o644) -> None:
+    """Escrita atômica com lock entre processos (arquivo-irmão .lock)."""
+    lock_path = path + ".lock"
+    deadline = datetime.now().timestamp() + 2.0
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                age = datetime.now().timestamp() - os.stat(lock_path).st_mtime
+                if age > 5:
+                    os.unlink(lock_path)
+                    continue
+            except FileNotFoundError:
+                continue
+            if datetime.now().timestamp() > deadline:
+                raise TimeoutError(f"lock timeout: {lock_path}")
+    try:
+        directory = os.path.dirname(path) or "."
+        fd, tmp = tempfile.mkstemp(prefix=".parley-tmp-", dir=directory)
+        try:
+            os.fchmod(fd, mode)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    finally:
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            pass
+
 def sign(msg: dict, agent_id: str, tenant: str = "default") -> dict:
     alg, key = _derive_key(agent_id, tenant)
     data = canonical_bytes(msg)
@@ -92,9 +214,23 @@ def verify(msg: dict) -> tuple[bool, str]:
     if not sig:
         return False, "sem assinatura"
     alg, key_id = sig.get("alg"), sig.get("key", "")
-    agent_id = key_id.split(":", 1)[1] if ":" in key_id else key_id
     tenant = msg.get("tenant", "default")
     data = canonical_bytes(msg)
+    if alg == "ed25519" and _HAVE_ED25519:
+        # Production key mode: signature.key is the raw base64 public key.
+        try:
+            raw_pub = base64.b64decode(key_id, validate=True)
+        except Exception:
+            raw_pub = b""
+        if len(raw_pub) == 32:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            try:
+                Ed25519PublicKey.from_public_bytes(raw_pub).verify(
+                    base64.b64decode(sig["sig"]), data)
+                return True, "assinatura válida (ed25519, chave do card)"
+            except Exception as e:
+                return False, f"assinatura inválida: {e}"
+    agent_id = key_id.split(":", 1)[1] if ":" in key_id else key_id
     if alg == "ed25519" and _HAVE_ED25519:
         alg2, key = _derive_key(agent_id, tenant)
         try:
@@ -336,12 +472,12 @@ def get_path(obj: dict, path: str):
             return None
     return cur
 
-def check_clause(clause: dict, msg: dict) -> tuple[bool, str]:
-    chk = clause.get("check")
-    if not chk:
-        return True, "nl (sem verificação de máquina)"
-    field, op, val = chk["field"], chk["op"], chk.get("value")
-    actual = msg.get("confidence") if field == "confidence" else get_path(msg.get("body", {}), field)
+def check_leaf(chk: dict, msg: dict) -> tuple[bool, str]:
+    field: str = chk["field"]
+    op: str = chk["op"]
+    val: Any = chk.get("value")
+    actual: Any = (msg.get("confidence") if field == "confidence"
+                   else get_path(msg.get("body", {}), field))
     if op == "not_null":
         ok = actual is not None
     elif op == "in":
@@ -354,6 +490,29 @@ def check_clause(clause: dict, msg: dict) -> tuple[bool, str]:
         ok = {"lt": actual < val, "lte": actual <= val, "gt": actual > val,
               "gte": actual >= val, "eq": actual == val}[op]
     return ok, f"{field}={actual!r} ({op} {val!r})"
+
+def check_clause(clause: dict, msg: dict) -> tuple[bool, str]:
+    chk = clause.get("check")
+    if not chk:
+        return True, "nl (sem verificação de máquina)"
+    if "all_of" in chk or "any_of" in chk:
+        details = {"all_of": [], "any_of": []}
+        all_ok, any_ok, present = True, False, False
+        for child in chk.get("all_of", []):
+            ok, detail = check_clause({"check": child}, msg)
+            details["all_of"].append(detail)
+            all_ok = all_ok and ok
+        if "all_of" in chk:
+            present = True
+        for child in chk.get("any_of", []):
+            ok, detail = check_clause({"check": child}, msg)
+            details["any_of"].append(detail)
+            any_ok = any_ok or ok
+        if "any_of" in chk:
+            present = True
+        ok = all_ok and (not ("any_of" in chk) or any_ok) if present else False
+        return ok, f"all_of={details['all_of']} any_of={details['any_of']}"
+    return check_leaf(chk, msg)
 
 # ---------------------------------------------------------------- ranking
 #
@@ -495,12 +654,113 @@ def thread_from(cap: int, msgs: list[dict]) -> Thread:
         th.apply(m)
     return th
 
+# ---------------------------------------------------------------- agreement
+
+def agreement_canonical_bytes(agr: dict) -> bytes:
+    tree = {k: v for k, v in agr.items() if k not in ("id", "signatures")}
+    return canonical_json(tree).encode("utf-8")
+
+def assign_agreement_id(agr: dict) -> str:
+    canon = agreement_canonical_bytes(agr)
+    aid = "agreement:" + hashlib.sha256(canon).hexdigest()[:16]
+    agr["id"] = aid
+    return aid
+
+def build_agreement(request: dict, offer: dict, acceptance: dict) -> dict:
+    if not request or not offer or not acceptance:
+        raise ValueError("agreement: request/offer/acceptance obrigatórios")
+    if not request.get("id") or not offer.get("id") or not acceptance.get("id"):
+        raise ValueError("agreement: mensagens sem id de conteúdo")
+    if request.get("act") != "request":
+        raise ValueError(f"agreement: raiz deve ser request, obtido {request.get('act')}")
+    if offer.get("act") not in ("propose", "counter"):
+        raise ValueError(f"agreement: oferta deve ser propose/counter, obtido {offer.get('act')}")
+    if acceptance.get("act") not in ("accept", "commit"):
+        raise ValueError(f"agreement: aceite deve ser accept/commit, obtido {acceptance.get('act')}")
+    belongs = acceptance.get("parent") in (request["id"], offer["id"])
+    if not belongs:
+        # provenance também expressa a filiação (accept sem parent explícito)
+        prov = set(acceptance.get("provenance", []))
+        belongs = request["id"] in prov and offer["id"] in prov
+    if not belongs:
+        raise ValueError(f"agreement: aceite {acceptance['id']} não pertence à thread request/offer")
+    binding = sorted(acceptance.get("clauses", []))
+    tenant = acceptance.get("tenant") or request.get("tenant")
+    out = {
+        "v": 0,
+        "request_id": request["id"],
+        "offer_id": offer["id"],
+        "acceptance_id": acceptance["id"],
+        "act": acceptance["act"],
+        "requestor": dict(request["from"]),
+        "provider": dict(offer["from"]),
+        "binding_clauses": binding,
+    }
+    if tenant:
+        out["tenant"] = tenant
+    if request.get("target"):
+        out["target"] = request["target"]
+    if offer.get("body") is not None:
+        out["body"] = dict(offer["body"])
+    return out
+
+def sign_agreement(agr: dict, agent: str, keystore: KeyStore, tenant: str = "default") -> dict:
+    key = keystore.get(agent, tenant)
+    if key is None:
+        raise KeyError(f"chave ausente: {tenant}/{agent}")
+    out = dict(agr)
+    canon = agreement_canonical_bytes(out)
+    sig = {
+        "alg": "ed25519",
+        "key": keystore.public_bytes(agent, tenant),
+        "sig": base64.b64encode(key.sign(canon)).decode(),
+    }
+    sigs = [s for s in out.get("signatures", []) if s.get("agent") != agent]
+    sigs.append({"agent": agent, "signature": sig})
+    sigs.sort(key=lambda x: x["agent"])
+    out["signatures"] = sigs
+    assign_agreement_id(out)
+    return out
+
+def verify_agreement(agr: dict) -> tuple[bool, str]:
+    aid = agr.get("id", "")
+    if not aid:
+        return False, "agreement sem id"
+    canon = agreement_canonical_bytes(agr)
+    expected = "agreement:" + hashlib.sha256(canon).hexdigest()[:16]
+    if expected != aid:
+        return False, "id de conteúdo divergente"
+    sigs = agr.get("signatures", [])
+    if not sigs:
+        return False, "agreement sem assinaturas"
+    seen = set()
+    for s in sigs:
+        agent = s.get("agent", "")
+        if agent in seen:
+            return False, f"assinatura duplicada: {agent}"
+        seen.add(agent)
+        sig = s.get("signature")
+        if not sig:
+            return False, f"assinatura ausente: {agent}"
+        if not _HAVE_ED25519:
+            return False, "cryptography não disponível para ed25519"
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        raw_pub = base64.b64decode(sig["key"])
+        try:
+            Ed25519PublicKey.from_public_bytes(raw_pub).verify(
+                base64.b64decode(sig["sig"]), canon)
+        except Exception as e:
+            return False, f"assinatura inválida ({agent}): {e}"
+    return True, "agreement válido"
+
 def validate(msg: dict, parent: dict | None = None, now: datetime | None = None) -> dict:
     """Retorna {schema_ok, signature_ok, sig_msg, tenant_ok, clauses: [...], warnings: [...]}."""
     from jsonschema import validate as jsval, ValidationError
     out = {"id": msg.get("id"), "act": msg.get("act"), "warnings": []}
 
-    schema = json.load(open(__file__.replace("parley.py", "schema/parley-v0.schema.json")))
+    schema_path = __file__.replace(
+        "parley.py", f"schema/parley-v{'1' if int(msg.get('v', 0) or 0) >= 1 else '0'}.schema.json")
+    schema = json.load(open(schema_path))
     try:
         jsval(msg, schema)
         out["schema_ok"] = True

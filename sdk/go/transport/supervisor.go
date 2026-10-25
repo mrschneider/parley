@@ -39,13 +39,13 @@ import (
 
 // FallbackDelivery is the receipt of one escalation.
 type FallbackDelivery struct {
-	ID        string    `json:"id"`                   // original tracked message id
-	To        string    `json:"to"`                   // fallback agent id
-	Reason    string    `json:"reason"`               // "deadline" | "decline"
-	At        time.Time `json:"at"`                   // when the escalation fired
-	Original  []byte    `json:"-"`                    // raw envelope (as received)
-	Delivered []byte    `json:"-"`                    // raw envelope as handed to the sink
-	ReplyID   string    `json:"reply_id,omitempty"`   // primary reply (decline audit)
+	ID        string    `json:"id"`                 // original tracked message id
+	To        string    `json:"to"`                 // fallback agent id
+	Reason    string    `json:"reason"`             // "deadline" | "decline"
+	At        time.Time `json:"at"`                 // when the escalation fired
+	Original  []byte    `json:"-"`                  // raw envelope (as received)
+	Delivered []byte    `json:"-"`                  // raw envelope as handed to the sink
+	ReplyID   string    `json:"reply_id,omitempty"` // primary reply (decline audit)
 }
 
 // FallbackSink receives escalated messages. In production this is a queue/
@@ -53,13 +53,42 @@ type FallbackDelivery struct {
 // tests it is an in-memory recorder.
 type FallbackSink func(to string, raw []byte) *Result
 
+// CompleteFallbackSink returns a standard fallback sink that completes the
+// escalation envelope and delivers it. It re-targets the original signed
+// envelope, assigns a fresh content id, re-signs it using keyStore, and
+// hands the resulting raw JSON to the destination inbox.
+func CompleteFallbackSink(keyStore *parley.KeyStore, tenant string, inboxes map[string]*Inbox) FallbackSink {
+	return func(to string, raw []byte) *Result {
+		var original parley.Message
+		if err := json.Unmarshal(raw, &original); err != nil {
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: json inválido: " + err.Error()}
+		}
+		escalated := DeliverFallback(&original)
+		escalated.To = parley.AgentRef{ID: to, Tenant: original.To.Tenant}
+		parley.AssignID(escalated)
+		signed, err := keyStore.SignWith(escalated, tenant)
+		if err != nil {
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: " + err.Error()}
+		}
+		inbox, ok := inboxes[to]
+		if !ok {
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: inbox não registrado: " + to}
+		}
+		rawOut, err := json.Marshal(signed)
+		if err != nil {
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: " + err.Error()}
+		}
+		return inbox.Deliver(rawOut)
+	}
+}
+
 // Supervisor watches deadlines and routes fallbacks.
 type Supervisor struct {
 	mu        sync.Mutex
 	tracked   map[string]*trackEntry
-	done      map[string]bool       // original id -> already settled (reply/escalation)
+	done      map[string]bool // original id -> already settled (reply/escalation)
 	sinks     map[string]FallbackSink
-	delivered []FallbackDelivery    // audit trail
+	delivered []FallbackDelivery // audit trail
 	now       func() time.Time
 	wake      chan struct{}
 	stop      bool

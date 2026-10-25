@@ -10,7 +10,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from parley import (parse_text, finalize, sign, rank_proposals, Thread,
-                    thread_from, Thread as _T)  # noqa: E402
+                    thread_from, Thread as _T,  # noqa: F401
+                    KeyStore, verify, check_clause, validate,
+                    build_agreement, sign_agreement, verify_agreement,
+                    _HAVE_ED25519)  # noqa: E402
 
 T0 = "2026-10-23T09:00:00Z"
 
@@ -255,6 +258,105 @@ def test_ranking_interop_fixture_matches_go():
             f"ordem[{i}] = {got['proposal']['id']}, esperado {ex['id']}"
         assert abs(got["score"] - ex["score"]) < 1e-9, \
             f"score[{i}] = {got['score']}, esperado {ex['score']}"
+
+
+# ---------------------------------------------------------------- keystore / acordos / v1
+
+def test_keystore_real_keys_sign_and_reload(tmp_path=None):
+    import tempfile, os, stat
+    if not _HAVE_ED25519:
+        return  # cryptography ausente: caminho de produção indisponível
+    tmp = tmp_path or tempfile.mkdtemp()
+    path = os.path.join(tmp, "keys.json")
+    ks = KeyStore()
+    ks.generate("worker-1", "acme")
+    ks.save(path)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+    m = _with_id(_msg("worker-1", "planner-1", "inform"))
+    signed = ks.sign_message(m, "worker-1", "acme")
+    ok, why = verify(signed)
+    assert ok and "chave do card" in why, why
+
+    reloaded = KeyStore()
+    reloaded.load(path)
+    signed2 = reloaded.sign_message(m, "worker-1", "acme")
+    assert signed2["signature"]["sig"] == signed["signature"]["sig"]
+
+    # tamper: o corpo muda -> id muda -> assinatura cai
+    tampered = dict(signed, body={"x": 1})
+    ok, _ = verify(tampered)
+    assert not ok
+
+
+def test_composite_checks_v1_schema():
+    chk = {"check": {"all_of": [
+        {"field": "route.eta_min", "op": "lte", "value": 150},
+        {"any_of": [
+            {"field": "route.toll_free", "op": "eq", "value": True},
+            {"field": "route.eta_min", "op": "lte", "value": 80},
+        ]},
+    ]}}
+    ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 100, "toll_free": True}}})
+    assert ok
+    ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 151, "toll_free": True}}})
+    assert not ok          # all_of falhou
+    ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 140, "toll_free": False}}})
+    assert not ok          # any_of sem braço ativo
+
+    # v1 aceita composite; v0 rejeita
+    m = _with_id(_msg("planner-42", "dispatcher-7", "propose", target="route.plan"))
+    m["v"] = 1
+    m["expect"] = [dict(chk, id="composite", weight=1)]
+    if _HAVE_ED25519:
+        m = sign(m, "planner-42", "acme")
+    r1 = validate(m)
+    assert r1["schema_ok"], r1.get("schema_error")
+    m0 = dict(m, v=0)
+    r0 = validate(m0)
+    assert not r0["schema_ok"]
+
+
+def test_agreement_build_sign_verify_and_tamper():
+    if not _HAVE_ED25519:
+        return
+    req = _with_id(_msg("planner-42", "dispatcher-7", "request",
+                        target="route.plan", body={"origin": "Lisboa"}))
+    offer = _with_id(_msg("dispatcher-7", "planner-42", "propose",
+                          target="route.plan", parent=req["id"],
+                          body={"route": {"eta_min": 100}}, clauses=["c3"]))
+    acc = _with_id(_msg("planner-42", "dispatcher-7", "commit",
+                        target="route.plan", parent=offer["id"], clauses=["c3"]))
+    agr = build_agreement(req, offer, acc)
+    assert agr["target"] == "route.plan" and agr["act"] == "commit"
+    assert agr["binding_clauses"] == ["c3"]
+    assert agr["provider"]["id"] == "dispatcher-7"
+    assert "id" not in agr and "signatures" not in agr
+
+    # thread mismatch deve falhar
+    bad = dict(acc, parent="msg:0000000000000000")
+    try:
+        build_agreement(req, offer, bad)
+        raise AssertionError("thread mismatch aceito")
+    except ValueError:
+        pass
+
+    ks = KeyStore()
+    ks.generate("planner-42", "acme")
+    ks.generate("dispatcher-7", "acme")
+    single = sign_agreement(agr, "planner-42", ks, "acme")
+    ok, why = verify_agreement(single)
+    assert ok, why
+
+    # adulteração invalida o id de conteúdo
+    tampered = dict(single, binding_clauses=["c1", "c3"])
+    ok, why = verify_agreement(tampered)
+    assert not ok and why == "id de conteúdo divergente"
+
+    both = sign_agreement(single, "dispatcher-7", ks, "acme")
+    assert len(both["signatures"]) == 2
+    ok, why = verify_agreement(both)
+    assert ok, why
 
 
 # ---------------------------------------------------------------- main

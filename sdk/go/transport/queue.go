@@ -63,6 +63,7 @@ func WithStoreFile(path string) Option {
 type Inbox struct {
 	mu        sync.Mutex
 	seen      map[string]bool
+	seenAt    map[string]time.Time
 	store     map[string]*parley.Message
 	verify    func(*parley.Message) (bool, string)
 	tenant    string
@@ -70,12 +71,20 @@ type Inbox struct {
 	storePath string
 	contracts map[string]*parley.Capability
 	threads   map[string]*parley.Thread // root (request) id -> thread
+	retention RetentionPolicy
+}
+
+// RetentionPolicy bounds inbox memory. Zero values disable each bound.
+type RetentionPolicy struct {
+	MaxAge     time.Duration // remove messages older than this
+	MaxRecords int           // keep at most this many accepted messages/ids
 }
 
 // NewInbox builds an inbox.
 func NewInbox(opts ...Option) *Inbox {
 	in := &Inbox{
 		seen:    map[string]bool{},
+		seenAt:  map[string]time.Time{},
 		store:   map[string]*parley.Message{},
 		verify:  parley.Verify,
 		now:     time.Now,
@@ -87,6 +96,77 @@ func NewInbox(opts ...Option) *Inbox {
 	return in
 }
 
+// WithRetention bounds accepted-message memory. MaxAge zero disables age
+// eviction; MaxRecords zero disables count eviction. Eviction applies to
+// both the store and replay set (an evicted id may be accepted again).
+func WithRetention(maxAge time.Duration, maxRecords int) Option {
+	return func(in *Inbox) { in.retention = RetentionPolicy{MaxAge: maxAge, MaxRecords: maxRecords} }
+}
+
+// Sweep enforces the retention policy now and returns removed ids.
+func (in *Inbox) Sweep() []string {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.sweepLocked(in.now())
+}
+
+func (in *Inbox) sweepLocked(now time.Time) []string {
+	type record struct {
+		id string
+		at time.Time
+	}
+	records := make([]record, 0, len(in.store))
+	for id, m := range in.store {
+		at, err := time.Parse("2006-01-02T15:04:05Z", m.TS)
+		if err != nil {
+			at = in.seenAt[id]
+		}
+		if at.IsZero() {
+			at = now
+		}
+		records = append(records, record{id: id, at: at})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].at.Equal(records[j].at) {
+			return records[i].id < records[j].id
+		}
+		return records[i].at.Before(records[j].at)
+	})
+
+	removedSet := map[string]bool{}
+	for _, r := range records {
+		if in.retention.MaxAge > 0 && now.Sub(r.at) > in.retention.MaxAge {
+			removedSet[r.id] = true
+		}
+	}
+	if in.retention.MaxRecords > 0 {
+		alive := 0
+		for i := len(records) - 1; i >= 0; i-- {
+			r := records[i]
+			if removedSet[r.id] {
+				continue
+			}
+			alive++
+			if alive > in.retention.MaxRecords {
+				removedSet[r.id] = true
+			}
+		}
+	}
+	if len(removedSet) == 0 {
+		return nil
+	}
+	removed := make([]string, 0, len(removedSet))
+	for id := range removedSet {
+		delete(in.seen, id)
+		delete(in.seenAt, id)
+		delete(in.store, id)
+		delete(in.threads, id)
+		removed = append(removed, id)
+	}
+	sort.Strings(removed)
+	return removed
+}
+
 // WithContracts supplies the capability contracts (name -> declaration)
 // known to this inbox, so delivered messages whose target names a known
 // capability get their body validated against the capability's
@@ -95,6 +175,13 @@ func NewInbox(opts ...Option) *Inbox {
 // inputs it declared, and that proposals it receives match the outputs.
 func WithContracts(c map[string]*parley.Capability) Option {
 	return func(in *Inbox) { in.contracts = c }
+}
+
+// WithCardRegistry replaces derived-key verification with the production
+// registry path: Registry.VerifyMessageWithCard resolves the sender's
+// current card and verifies against card.Pub.
+func WithCardRegistry(registry *parley.Registry) Option {
+	return func(in *Inbox) { in.verify = registry.VerifyMessageWithCard }
 }
 
 // Deliver processes one raw transport payload (JSON of a signed message).
@@ -211,7 +298,9 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 		}
 	}
 	in.seen[m.ID] = true
+	in.seenAt[m.ID] = in.now()
 	in.store[m.ID] = &m
+	in.sweepLocked(in.now())
 	needSave := in.storePath != ""
 	in.mu.Unlock()
 	res.Status = StatusAccepted
@@ -284,6 +373,9 @@ func (in *Inbox) RankProposals(rootID string) *parley.Ranking {
 }
 
 // Save writes the accepted id set + messages to in.storePath (if set).
+// Write is atomic (temp + rename) so a crash mid-write never corrupts the
+// store, and a file lock serializes concurrent processes pointing at the
+// same path (two inboxes writing the same file otherwise interleave).
 func (in *Inbox) Save() error {
 	in.mu.Lock()
 	if in.storePath == "" {
@@ -299,12 +391,23 @@ func (in *Inbox) Save() error {
 	for _, m := range in.store {
 		msgs = append(msgs, parley.MessageToAny(m))
 	}
+	path := in.storePath
 	in.mu.Unlock()
 	b, err := json.Marshal(map[string]any{"ids": ids, "messages": msgs})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(in.storePath, b, 0644)
+	return lockedWrite(path, b)
+}
+
+// lockFile holds an exclusive advisory lock on path during a write
+// (best-effort: on systems without flock support the write proceeds —
+// atomicity via rename still holds).
+func lockedWrite(path string, b []byte) error {
+	if err := parley.AtomicWriteFile(path, b, 0644); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Load restores the accepted id set + messages from in.storePath (if set).

@@ -17,9 +17,9 @@ func TestInteropRankingGoMatchesPython(t *testing.T) {
 		t.Skip("fixture interop-ranking ausente")
 	}
 	var fx struct {
-		Parent     map[string]any `json:"parent"`
-		Proposals  []map[string]any `json:"proposals"`
-		Expected   []struct {
+		Parent    map[string]any   `json:"parent"`
+		Proposals []map[string]any `json:"proposals"`
+		Expected  []struct {
 			ID    string  `json:"id"`
 			Score float64 `json:"score"`
 		} `json:"expected"`

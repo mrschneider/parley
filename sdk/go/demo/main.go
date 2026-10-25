@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -189,7 +190,7 @@ func main() {
 		return parley.Sign(m, agent, "acme")
 	}
 	offA := buildOffer("dispatcher-7", NOW.Add(time.Minute), 142, 0.93, nil)
-	offB := buildOffer("dispatcher-8", NOW.Add(2 * time.Minute), 100, 0.95, []string{"c3"})
+	offB := buildOffer("dispatcher-8", NOW.Add(2*time.Minute), 100, 0.95, []string{"c3"})
 	rk := parley.RankProposals(m1, []*parley.Message{offA, offB})
 	for _, e := range rk.Entries {
 		fmt.Printf("  %s: score=%.2f  ok=%v viol=%v\n",
@@ -210,7 +211,119 @@ func main() {
 	fmt.Printf("estado final: %s (accept encerrou; ofertas=%d cap=%d)\n",
 		th.State, th.OfferCount, th.Cap)
 
-	banner("10) RESUMO")
+	banner("10) RUNTIME DE PRODUÇÃO: chaves reais + registro + fallback completo")
+	// Diferente do modo teste (chave derivada do id), aqui as chaves são
+	// ed25519 REAIS em keystore, os cards publicam a pública no registro, e o
+	// inbox do fallback confia no registro (Registry.VerifyMessageWithCard).
+	keyDir, _ := os.MkdirTemp("", "parley-demo-")
+	defer os.RemoveAll(keyDir)
+	agents := []string{"planner-42", "dispatcher-7", "dispatcher-backup"}
+	ks, pubs, err := parley.LoadOrGenerate(keyDir+"/keys.json", "acme", agents)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keystore:", err)
+		os.Exit(1)
+	}
+	registry := parley.NewRegistry()
+	for _, agent := range agents {
+		card := &parley.Card{
+			V: parley.Version, Agent: agent, Tenant: "acme",
+			Endpoint: "runtime://" + agent, Transport: "queue",
+			Pub: parley.CardPubKey{Alg: "ed25519",
+				Key: base64.StdEncoding.EncodeToString(pubs[agent])},
+			Provides: []parley.CardCapability{{Name: "route.plan", Version: 1}},
+		}
+		card = parley.SignCardWith(card, ks.MustGet(agent, "acme"))
+		if err := registry.Publish(card, agent, NOW); err != nil {
+			fmt.Fprintln(os.Stderr, "registro:", err)
+			os.Exit(1)
+		}
+	}
+	fmt.Printf("registro: %d cards publicados (chaves reais, verificados contra card.Pub)\n",
+		len(registry.List("acme")))
+
+	prodReq := parley.NewMessage("planner-42", "dispatcher-7", NOW)
+	prodReq.Tenant = "acme"
+	prodReq.Act = "request"
+	prodReq.Target = "route.plan"
+	prodReq.Body = map[string]any{"origin": "Lisboa", "dest": "Porto"}
+	prodReq.Deadline = NOW.Add(5 * time.Minute).UTC().Format("2006-01-02T15:04:05Z")
+	prodReq.Fallback = &parley.Fallback{To: parley.AgentRef{ID: "dispatcher-backup"}, Reason: "timeout"}
+	parley.AssignID(prodReq)
+	prodReq, err = ks.SignWith(prodReq, "acme")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sign:", err)
+		os.Exit(1)
+	}
+	prodRaw, _ := json.Marshal(prodReq)
+
+	prodInbox := transport.NewInbox(transport.WithCardRegistry(registry))
+	fbProdInbox := transport.NewInbox(transport.WithCardRegistry(registry))
+	prodSup := transport.NewSupervisor().WithClock(func() time.Time { return NOW })
+	completeSink := transport.CompleteFallbackSink(ks, "acme",
+		map[string]*transport.Inbox{"dispatcher-backup": fbProdInbox})
+	var fbRes *transport.Result
+	prodSup.RegisterSink("dispatcher-backup", func(to string, raw []byte) *transport.Result {
+		fbRes = completeSink(to, raw)
+		return fbRes
+	})
+
+	resProd := prodInbox.Deliver(prodRaw)
+	fmt.Printf("inbox com trust do registro: %s (%s) | assinatura via card: ", resProd.Status, resProd.Reason)
+	okCard, whyCard := registry.VerifyMessageWithCard(prodReq)
+	fmt.Printf("%v (%s)\n", okCard, whyCard)
+
+	prodSup.Track(prodRaw)
+	prodSup.WithClock(func() time.Time { return NOW.Add(6 * time.Minute) })
+	prodDel := prodSup.Tick()
+	prodAccepted := false
+	if len(prodDel) == 1 && fbRes != nil && fbRes.Status == transport.StatusAccepted {
+		if em, ok := fbProdInbox.Get(fbRes.ID); ok {
+			escOK, escWhy := registry.VerifyMessageWithCard(em)
+			prodAccepted = escOK
+			fmt.Printf("escalada automática: to=%s provenance=%d assinatura re-verificada no card=%v (%s)\n",
+				em.To.ID, len(em.Provenance), escOK, escWhy)
+		}
+	} else {
+		fmt.Println("AVISO: escalada de produção não confirmada")
+	}
+
+	banner("11) AGREEMENT: recibo canônico da negociação, assinado pelos dois lados")
+	// O accept da demo materializa o acordo: quem venceu, cláusulas NL que
+	// viraram binding e o corpo aceito — auditável sem replayer a thread.
+	agr, err := parley.BuildAgreement(m1, m2, m3)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agreement:", err)
+		os.Exit(1)
+	}
+	ksAgr, _, err := parley.LoadOrGenerate(keyDir+"/agr-keys.json", "acme",
+		[]string{"planner-42", "dispatcher-7"})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keystore:", err)
+		os.Exit(1)
+	}
+	agr, err = parley.SignAgreement(agr, "planner-42", "acme", ksAgr.MustGet("planner-42", "acme"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sign agreement:", err)
+		os.Exit(1)
+	}
+	agrOK1, agrWhy1 := parley.VerifyAgreement(agr)
+	agr, err = parley.SignAgreement(agr, "dispatcher-7", "acme", ksAgr.MustGet("dispatcher-7", "acme"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sign agreement:", err)
+		os.Exit(1)
+	}
+	agrOK2, agrWhy2 := parley.VerifyAgreement(agr)
+	fmt.Printf("acordo id=%s act=%s provider=%s binding=%v assinaturas=%d single=%v (%s) dupla=%v (%s)\n",
+		agr.ID, agr.Act, agr.Provider.ID, agr.BindingClauses, len(agr.Signatures),
+		agrOK1, agrWhy1, agrOK2, agrWhy2)
+
+	// adulterar o corpo aceito invalida o id de conteúdo
+	agrTampered := *agr
+	agrTampered.Body = map[string]any{"route": map[string]any{"eta_min": 999}}
+	tamOK, _ := parley.VerifyAgreement(&agrTampered)
+	fmt.Printf("acordo adulterado detectado: %v\n", !tamOK)
+
+	banner("12) RESUMO")
 	fmt.Printf("schema canônico:  3 mensagens validadas contra schema v0\n")
 	fmt.Printf("assinaturas:      %v, %v, %v (alg: %s)\n",
 		r1["signature_ok"], r2["signature_ok"], r3["signature_ok"], m1.Signature.Alg)
@@ -231,7 +344,9 @@ func main() {
 	if r1["schema_ok"].(bool) && r2["signature_ok"].(bool) && r3["signature_ok"].(bool) &&
 		!r2b["signature_ok"].(bool) && !bcBad["ok"].(bool) && len(del) == 1 &&
 		rEsc.Status == transport.StatusAccepted &&
-		rk.Top.Proposal.From.ID == "dispatcher-8" && th.State == "settled" {
+		rk.Top.Proposal.From.ID == "dispatcher-8" && th.State == "settled" &&
+		resProd.Status == transport.StatusAccepted && okCard && prodAccepted &&
+		agrOK2 && !tamOK {
 		os.Exit(0)
 	}
 	os.Exit(1)

@@ -54,11 +54,15 @@ type Field struct {
 	Type string `json:"type"`
 }
 
-// Check is a machine-checkable constraint over body fields.
+// Check is a machine-checkable constraint over body fields. A leaf has
+// Field+Op (+Value). v1 composite forms have AllOf and/or AnyOf over nested
+// leaf checks.
 type Check struct {
-	Field string      `json:"field"`
-	Op    string      `json:"op"`
+	Field string      `json:"field,omitempty"`
+	Op    string      `json:"op,omitempty"`
 	Value interface{} `json:"value,omitempty"`
+	AllOf []Check     `json:"all_of,omitempty"`
+	AnyOf []Check     `json:"any_of,omitempty"`
 }
 
 // Clause is a hybrid contract clause: machine-checkable (Check) and/or
@@ -323,17 +327,43 @@ func clauseToAny(c Clause) map[string]any {
 		out["id"] = c.ID
 	}
 	if c.Check != nil {
-		ch := map[string]any{"field": c.Check.Field, "op": c.Check.Op}
-		if c.Check.Value != nil {
-			ch["value"] = c.Check.Value
-		}
-		out["check"] = ch
+		out["check"] = checkToAny(*c.Check)
 	}
 	if c.NL != "" {
 		out["nl"] = c.NL
 	}
 	out["weight"] = c.Weight
 	return out
+}
+
+// checkToAny canonicalizes leaf and composite checks without inventing
+// empty fields.
+func checkToAny(c Check) map[string]any {
+	out := map[string]any{}
+	if c.Field != "" {
+		out["field"] = c.Field
+	}
+	if c.Op != "" {
+		out["op"] = c.Op
+	}
+	if c.Value != nil {
+		out["value"] = c.Value
+	}
+	if len(c.AllOf) > 0 {
+		out["all_of"] = checksToAny(c.AllOf)
+	}
+	if len(c.AnyOf) > 0 {
+		out["any_of"] = checksToAny(c.AnyOf)
+	}
+	return out
+}
+
+func checksToAny(cs []Check) []any {
+	arr := make([]any, 0, len(cs))
+	for _, c := range cs {
+		arr = append(arr, checkToAny(c))
+	}
+	return arr
 }
 
 // CanonicalBytes returns the canonical serialization of m: every field
@@ -381,22 +411,25 @@ func Sign(m *Message, agentID, tenant string) *Message {
 	return &out
 }
 
-// Verify checks m's signature against the deterministic test key derived
-// from the signer id (embedded in signature.key) and the message tenant.
+// Verify checks m's signature. It supports both key modes:
+//   - "parley-test:<agent id>" keys derived from identity (test path)
+//   - raw base64 ed25519 public keys emitted by KeyStore.SignWith (the
+//     production path; the key can also be confirmed against the signer's card)
 func Verify(m *Message) (bool, string) {
 	sig := m.Signature
 	if sig == nil {
 		return false, "sem assinatura"
 	}
-	agentID := sig.Key
-	if i := strings.Index(sig.Key, ":"); i >= 0 {
-		agentID = sig.Key[i+1:]
+	keyID := sig.Key
+	agentID := keyID
+	if i := strings.Index(keyID, ":"); i >= 0 {
+		agentID = keyID[i+1:]
 	}
 	tenant := m.Tenant
 	if tenant == "" {
 		tenant = "default"
 	}
-	canon, err := CanonicalBytes(m)
+	canonical, err := CanonicalBytes(m)
 	if err != nil {
 		return false, "canonical: " + err.Error()
 	}
@@ -404,17 +437,26 @@ func Verify(m *Message) (bool, string) {
 	if err != nil {
 		return false, "assinatura base64 inválida"
 	}
+	if sig.Alg == "ed25519" {
+		if rawPub, decodeErr := base64.StdEncoding.DecodeString(keyID); decodeErr == nil &&
+			len(rawPub) == ed25519.PublicKeySize {
+			if ed25519.Verify(ed25519.PublicKey(rawPub), canonical, sigBytes) {
+				return true, "assinatura válida (ed25519, chave do card)"
+			}
+			return false, "assinatura inválida (ed25519, chave do card)"
+		}
+	}
 	sum := sha256.Sum256([]byte(tenant + ":" + agentID))
 	switch sig.Alg {
 	case "ed25519":
 		pub := ed25519.NewKeyFromSeed(sum[:]).Public().(ed25519.PublicKey)
-		if ed25519.Verify(pub, canon, sigBytes) {
+		if ed25519.Verify(pub, canonical, sigBytes) {
 			return true, "assinatura válida (ed25519)"
 		}
 		return false, "assinatura inválida (ed25519)"
 	case "hmac-sha256":
 		mac := hmac.New(sha256.New, sum[:])
-		mac.Write(canon)
+		mac.Write(canonical)
 		if hmac.Equal(mac.Sum(nil), sigBytes) {
 			return true, "assinatura válida (hmac-sha256)"
 		}

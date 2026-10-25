@@ -34,10 +34,10 @@ import "fmt"
 type ThreadState string
 
 const (
-	StateNew        ThreadState = "new"        // ainda não aberta
+	StateNew         ThreadState = "new"         // ainda não aberta
 	StateNegotiating ThreadState = "negotiating" // em curso
-	StateSettled    ThreadState = "settled"    // accept/commit (acordo)
-	StateRejected   ThreadState = "rejected"   // reject/cancel (sem acordo)
+	StateSettled     ThreadState = "settled"     // accept/commit (acordo)
+	StateRejected    ThreadState = "rejected"    // reject/cancel (sem acordo)
 )
 
 // Terminal states: after one of these, no further act is valid.
@@ -48,22 +48,22 @@ func (s ThreadState) Terminal() bool {
 // Thread is one negotiation: a request (with target) plus the acts that
 // follow it. The zero value is a closed (New) thread.
 type Thread struct {
-	ID         string       // root message id (the request)
-	Target     string       // capability under negotiation
-	State      ThreadState  // current state
-	LastOffer  string       // id of the latest propose/counter
-	OfferCount int          // offers seen since open (loop cap)
-	Cap        int          // max consecutive offers before the thread stalls
-	Trace      []TraceStep  // ordered log of applied acts (audit)
+	ID         string      // root message id (the request)
+	Target     string      // capability under negotiation
+	State      ThreadState // current state
+	LastOffer  string      // id of the latest propose/counter
+	OfferCount int         // offers seen since open (loop cap)
+	Cap        int         // max consecutive offers before the thread stalls
+	Trace      []TraceStep // ordered log of applied acts (audit)
 }
 
 // TraceStep is one applied act (deterministic audit trail).
 type TraceStep struct {
-	Act    string `json:"act"`
-	ID     string `json:"id"`
-	From   string `json:"from"`
-	To     string `json:"to"`
-	State  string `json:"state"` // state AFTER the act
+	Act   string `json:"act"`
+	ID    string `json:"id"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	State string `json:"state"` // state AFTER the act
 }
 
 // NewThread builds an unopened thread with the given loop cap (<=0 -> 8).

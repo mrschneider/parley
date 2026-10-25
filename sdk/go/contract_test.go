@@ -57,8 +57,8 @@ func TestBodyContractProposeOutputs(t *testing.T) {
 	m.Act = "propose"
 	m.Target = "route.plan"
 	m.Body = map[string]any{
-		"route":     map[string]any{"eta_min": 142},
-		"cost_eur":  1.4,
+		"route":    map[string]any{"eta_min": 142},
+		"cost_eur": 1.4,
 	}
 	r := BodyContract(m, capRoute())
 	if !r["ok"].(bool) {
@@ -123,7 +123,7 @@ func TestBodyContractKindSelection(t *testing.T) {
 	cases := map[string]string{
 		"request": "input", "inform": "input",
 		"propose": "output", "counter": "output",
-		"accept":  "output", "commit": "output",
+		"accept": "output", "commit": "output",
 	}
 	for act, want := range cases {
 		if got := ContractKind(act); got != want {

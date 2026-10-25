@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/parley/v1/message.schema.json",
+  "title": "PARLEY v1 canonical message",
+  "description": "Canonical form of one PARLEY message. The canonical JSON is the protocol: any platform that can read this schema speaks PARLEY, transport-agnostic (HTTP, WebSocket, queues). Version 1 adds composite machine clauses (all_of/any_of).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "id",
+    "from",
+    "to",
+    "act",
+    "ts"
+  ],
+  "properties": {
+    "v": {
+      "enum": [
+        0,
+        1
+      ],
+      "description": "Protocol version. 1 adds composite checks."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^msg:[0-9a-f]{8,64}$",
+      "description": "Globally unique message id (hex, prefixed)."
+    },
+    "parent": {
+      "type": "string",
+      "description": "Id of the message this one replies to (correlation across all three transports)."
+    },
+    "from": {
+      "$ref": "#/$defs/agentRef"
+    },
+    "to": {
+      "$ref": "#/$defs/agentRef"
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Tenant isolation key. Required in multi-tenant deployments; validators enforce it."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 send timestamp."
+    },
+    "act": {
+      "type": "string",
+      "enum": [
+        "inform",
+        "ask",
+        "request",
+        "propose",
+        "accept",
+        "reject",
+        "counter",
+        "commit",
+        "delegate",
+        "verify",
+        "cancel"
+      ],
+      "description": "Speech act (KQML lineage, LLM-era)."
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.]*\\.[a-z][a-z0-9_.]*$",
+      "description": "Qualified capability id, e.g. route.plan."
+    },
+    "intent": {
+      "type": "string",
+      "description": "Free-text intent for LLMs. Machine-optional, human-essential."
+    },
+    "body": {
+      "type": "object",
+      "description": "Structured payload. Validated against the capability's input/output contract when present."
+    },
+    "note": {
+      "type": "string",
+      "description": "Short free-text note (e.g. warnings in a propose)."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Sender's self-declared confidence in the body."
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 deadline for response/fulfillment."
+    },
+    "expect": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/clause"
+      },
+      "description": "Contract clauses the receiver must satisfy. Hybrid: machine-checkable 'check' + natural-language 'nl'."
+    },
+    "fallback": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/agentRef"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "description": "Routed here if the primary declines or misses the deadline."
+    },
+    "clauses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "In accept/reject/counter: ids of the parent's 'expect' clauses explicitly accepted (this is what makes an 'nl' clause binding)."
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Message ids this one is based on (chain of trust, auditable)."
+    },
+    "signature": {
+      "type": "object",
+      "properties": {
+        "alg": {
+          "const": "ed25519"
+        },
+        "key": {
+          "type": "string",
+          "description": "Public key id of the sender."
+        },
+        "sig": {
+          "type": "string",
+          "description": "Base64 signature over the canonical serialization (all fields except 'signature')."
+        }
+      },
+      "required": [
+        "alg",
+        "key",
+        "sig"
+      ]
+    }
+  },
+  "$defs": {
+    "agentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Stable agent id within a tenant."
+        },
+        "tenant": {
+          "type": "string"
+        }
+      }
+    },
+    "clause": {
+      "type": "object",
+      "description": "Hybrid contract clause. 'check' is machine-validated; 'nl' binds only after the counterparty's explicit accept (prevents silent ambiguity becoming a contract).",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable clause id, referenced by accept/reject."
+        },
+        "check": {
+          "$ref": "#/$defs/check"
+        },
+        "nl": {
+          "type": "string",
+          "description": "Natural-language clause. Binding only on explicit accept."
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1,
+          "description": "How much this clause matters to the sender (drives negotiation ranking)."
+        }
+      }
+    },
+    "check": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "Dotted path in body, e.g. route.eta_min."
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "eq",
+                "in",
+                "not_null",
+                "regex"
+              ]
+            },
+            "value": {}
+          },
+          "required": [
+            "field",
+            "op"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "all_of": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "any_of": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "all_of"
+              ]
+            },
+            {
+              "required": [
+                "any_of"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

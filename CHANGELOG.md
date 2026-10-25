@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Schema v1** (`schema/parley-v1.schema.json`): composite machine clauses
+  `all_of`/`any_of` (recursive); v0 explicitly rejects composites. Validated
+  by both implementations.
+- **Production keys**: `KeyStore` in Python and Go — real ed25519 pairs,
+  chmod 0600 persistence, signing with the raw public key as key id.
+  `verify`/`Verify` accept both test-derived and raw-key signatures.
+- **Registry trust anchor**: `Registry.VerifyMessageWithCard` + inbox option
+  `WithCardRegistry` — production verification path (card.Pub, revocation
+  checked).
+- **Complete fallback runtime**: `CompleteFallbackSink` retargets,
+  re-assigns the content id, re-signs with the KeyStore, and delivers the
+  escalation; end-to-end test ties Registry + Inbox + Supervisor together.
+- **WebSocket transport**: `WSServer`/`WSSend` (gorilla/websocket) — same
+  canonical JSON envelope as HTTP/queue, one text frame per message.
+- **Agreement receipt**: `build_agreement`/`BuildAgreement` materializes the
+  settlement (winning offer, accepted body, binding NL clauses) as a
+  content-addressed artifact signed by both requestor and provider;
+  tampering invalidates the id. Filiation via `parent` or `provenance`.
+- **Inbox retention**: `WithRetention(maxAge, maxRecords)` bounds store and
+  replay sets; automatic sweep per delivery + manual `Sweep()`.
+- **Cross-process write locking**: `LockedWrite`/`AtomicWriteFile` (exclusive
+  `.lock` sibling, stale-lock break at 5s, temp+rename) used by Inbox,
+  Registry, and KeyStore persistence (Python mirrors the same recipe).
+
+### Changed
+- `Registry.Marshal`/`Unmarshal` round-trip canonically (triples).
+- README: production trust model, v1 composites, runtime/production section.
+
 ## [v0.1.0] - 2026-10-25
 
 ### Added
