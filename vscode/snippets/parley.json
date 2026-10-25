@@ -1,8 +1,8 @@
 {
-  "agente": {
+  "agent": {
     "prefix": "agent",
-    "body": ["agent \"${1:id-estavel}\" as ${2:ALIAS}"],
-    "description": "Declara um agente com alias local"
+    "body": ["agent \"${1:stable-id}\" as ${2:ALIAS}"],
+    "description": "Declares an agent with a local alias"
   },
   "capability": {
     "prefix": "provides",
@@ -11,7 +11,7 @@
       "  input  ${3:origin} : ${4:Location}",
       "  output ${5:route}  : ${6:Route}"
     ],
-    "description": "Declara uma capability com contrato input/output"
+    "description": "Declares a capability with an input/output contract"
   },
   "request": {
     "prefix": "request",
@@ -19,10 +19,10 @@
       "${1:PLANNER} -> ${2:DISPATCHER}",
       "  request ${3:route.plan}",
       "  intent \"${4:...}\"",
-      "  with ${5:origin} = \"${6:Lisboa}\", ${7:dest} = \"${8:Porto}\"",
+      "  with ${5:origin} = \"${6:Lisbon}\", ${7:dest} = \"${8:Porto}\"",
       "  by ${9:2026-10-22T15:00:00Z}"
     ],
-    "description": "Pedido com contrato (abre a thread)"
+    "description": "Request with a contract (opens the thread)"
   },
   "propose": {
     "prefix": "propose",
@@ -33,7 +33,7 @@
       "  with ${4:route} = {${5:...}}",
       "  confidence ${6:0.93}"
     ],
-    "description": "Proposta contra um request"
+    "description": "Proposal against a request"
   },
   "accept": {
     "prefix": "accept",
@@ -43,16 +43,16 @@
       "  clauses \"${4:c3}\"",
       "  provenance \"@msg1\", \"@msg2\""
     ],
-    "description": "Aceite (torna cláusulas 'nl' vinculantes)"
+    "description": "Accept (makes 'nl' clauses binding)"
   },
   "expect": {
     "prefix": "expect",
     "body": ["expect ${1:confidence} > ${2:0.85} w ${3:0.9}"],
-    "description": "Cláusula de contrato (check, ponderada)"
+    "description": "Contract clause (check, weighted)"
   },
   "expect-nl": {
     "prefix": "expectnl",
-    "body": ["expect nl \"${1:Rota deve evitar obras nas próximas 24h}\" w ${2:0.9}"],
-    "description": "Cláusula em linguagem natural (víncula só se aceita em ACCEPT)"
+    "body": ["expect nl \"${1:Route must avoid roadworks in the next 24h}\" w ${2:0.9}"],
+    "description": "Natural-language clause (binds only if accepted in ACCEPT)"
   }
 }

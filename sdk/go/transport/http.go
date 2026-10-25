@@ -48,12 +48,12 @@ func (s *HTTPServer) handlePost(w http.ResponseWriter, r *http.Request) {
 	in, ok := s.inboxes[name]
 	s.mu.RUnlock()
 	if !ok {
-		http.Error(w, `{"error":"inbox não encontrado"}`, http.StatusNotFound)
+		http.Error(w, `{"error":"inbox not found"}`, http.StatusNotFound)
 		return
 	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"leitura do corpo falhou"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
 		return
 	}
 	res := in.Deliver(raw)

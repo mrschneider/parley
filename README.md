@@ -1,11 +1,11 @@
 # PARLEY
 
-**Linguagem/protocolo de domínio para comunicação entre agentes de IA** —
-negociação com contratos híbridos (cláusulas de máquina + linguagem natural),
-multi-tenant, agnóstico de transporte (HTTP, WebSocket, filas).
+**Domain-specific language/protocol for AI agent communication** —
+negotiation with hybrid contracts (machine clauses + natural language),
+multi-tenant, transport-agnostic (HTTP, WebSocket, queues).
 
-A serialização canônica JSON **é** o protocolo: qualquer plataforma que leia o
-[JSON Schema](schema/) fala PARLEY.
+The canonical JSON serialization **is** the protocol: any platform that reads the
+[JSON Schema](schema/) speaks PARLEY.
 
 [![CI](https://github.com/mrschneider/parley/actions/workflows/ci.yml/badge.svg)](https://github.com/mrschneider/parley/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mrschneider/parley)](https://github.com/mrschneider/parley/releases)
@@ -13,41 +13,41 @@ A serialização canônica JSON **é** o protocolo: qualquer plataforma que leia
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue.svg)](https://www.python.org/)
 [![Go](https://img.shields.io/badge/go-1.26-00ADD8.svg)](sdk/go/)
 
-## Visão geral do runtime
+## Runtime overview
 
 ```mermaid
 flowchart LR
-  subgraph Emissor
+  subgraph Emitter
     KS["KeyStore (ed25519 real)"]
-    TX["Assina o envelope"]
+    TX["Signs the envelope"]
     KS --> TX
   end
-  TX -->|"msg: JSON canônico assinado"| T{"Transporte<br/>HTTP · WS · fila"}
+  TX -->|"msg: signed canonical JSON"| T{"Transport<br/>HTTP · WS · queue"}
   T --> I["Inbox"]
-  D[("Registry<br/>Agent Cards")] -->|"card.Pub = âncora"| I
-  I --> P["Pipeline<br/>schema → assinatura → tenant → dedup"]
-  P --> TH["Thread + Ranking por peso"]
+  D[("Registry<br/>Agent Cards")] -->|"card.Pub = anchor"| I
+  I --> P["Pipeline<br/>schema → signature → tenant → dedup"]
+  P --> TH["Thread + Weight ranking"]
   TH --> S["Supervisor<br/>deadline / fallback"]
-  S -->|"CompleteFallbackSink<br/>re-alvoa + re-assina"| F["Fallback Inbox"]
-  TH --> A["Agreement<br/>recibo assinado por ambos"]
+  S -->|"CompleteFallbackSink<br/>re-targets + re-signs"| F["Fallback Inbox"]
+  TH --> A["Agreement<br/>receipt signed by both sides"]
 ```
 
-Cada caixa é verificada por testes E2E (`sdk/go/transport/runtime_test.go`) e
-pelo demo executável (`cd sdk/go && go run ./demo`, exit 0).
+Each box is verified by E2E tests (`sdk/go/transport/runtime_test.go`) and
+by the executable demo (`cd sdk/go && go run ./demo`, exit 0).
 
-## Índice
+## Contents
 
-- [Linguagem](#linguagem)
-- [Modelo de confiança](#modelo-de-confiança-agentes-não-confiáveis)
-- [Contratos híbridos](#contratos-híbridos)
+- [Language](#language)
+- [Trust model](#trust-model-untrusted-agents)
+- [Hybrid contracts](#hybrid-contracts)
 - [Schema v0 / v1](#schema-v0--v1)
-- [Runtime de produção](#runtime-de-produção-go)
-- [Componentes](#componentes)
+- [Production runtime](#production-runtime-go)
+- [Components](#components)
 - [Quickstart](#quickstart)
-- [LSP](#lsp--capacidades)
-- [Contribuindo](#contribuindo)
+- [LSP](#lsp--capabilities)
+- [Contributing](#contributing)
 
-## Linguagem
+## Language
 
 ```parley
 agent "planner-42" as PLANNER
@@ -59,124 +59,125 @@ provides "route.plan" v1
 
 PLANNER -> DISPATCHER
   request route.plan
-  intent "Rota mais rápida, usuário apressado"
-  with origin = "Lisboa", dest = "Porto"
+  intent "Fastest route, hurried user"
+  with origin = "Lisbon", dest = "Porto"
   by 2026-10-22T15:00:00Z
   expect confidence > 0.85
   expect route.eta_min <= 150 w 0.9
-  expect nl "Evitar obras nas próximas 24h" w 0.9
+  expect nl "Avoid roadworks in the next 24h" w 0.9
   fallback -> "dispatcher-backup"
 ```
 
-Exemplo completo em [`examples/negociacao.parley`](examples/negociacao.parley)
-(request → propose → accept seletivo).
+Full example in [`examples/negotiation.parley`](examples/negotiation.parley)
+(request → propose → selective accept).
 
-## Modelo de confiança (agentes NÃO confiáveis)
+## Trust model (untrusted agents)
 
-- **id de mensagem por conteúdo** (`msg:` + sha256 da serialização canônica) →
-  idempotência e detecção de replay
-- **assinatura** ed25519 sobre a serialização canônica (todo campo exceto
+- **content-based message id** (`msg:` + sha256 of the canonical serialization) →
+  idempotency and replay detection
+- **ed25519 signature** over the canonical serialization (every field except
   `signature`):
-  - **modo teste**: chave derivada do id (conveniente, NÃO seguro — qualquer um
-    que conheça o id forja a assinatura)
-  - **modo produção**: `KeyStore` (Python e Go) gera/carrega pares ed25519
-    reais; a pública vai para o **Agent Card** publicado no **Registry** e o
-    receptor verifica via `card.Pub` (`Registry.VerifyMessageWithCard`) — a
-    âncora de confiança é o card registrado, não a derivação
-- **tenant** no envelope, exigível pelo validador
-- **provenance**: cadeia de ids que fundamenta a mensagem (também expressa a
-  filiação de um `accept` sem `parent` explícito)
+  - **test mode**: key derived from the id (convenient, NOT secure — anyone who
+    knows the id can forge the signature)
+  - **production mode**: `KeyStore` (Python and Go) generates/loads real ed25519
+    key pairs; the public key goes into the **Agent Card** published in the
+    **Registry** and the receiver verifies via `card.Pub`
+    (`Registry.VerifyMessageWithCard`) — the trust anchor is the registered
+    card, not the derivation
+- **tenant** in the envelope, enforceable by the validator
+- **provenance**: chain of ids that grounds the message (also expresses the
+  lineage of an `accept` without an explicit `parent`)
 
-## Contratos híbridos
+## Hybrid contracts
 
-- cláusula `check` — validada por máquina (caminho no body, operador, valor);
-  em **v1** aceita composição recursiva `all_of` (E) / `any_of` (OU)
-- cláusula `nl` — linguagem natural; só fica **VINCULANTE** quando a contraparte
-  a lista explicitamente em `accept ... clauses "cN"`
-- **ranking por peso** (`clause.weight`): `rank_proposals` ordena as propostas
-  pela fração de peso contratual satisfeita. O ranking **orienta**, o requestor
-  decide. Semântica idêntica em Python (referência) e Go.
-- **acordo materializado** (`build_agreement` / `BuildAgreement`): ao assentar,
-  a negociação vira um recibo canônico de conteúdo endereçado (`agreement:` +
-  sha256) com vencedor, corpo aceito e cláusulas binding — assinado por
-  requestor **e** provider, verificável sem replayer a thread.
+- `check` clause — machine-validated (path in the body, operator, value);
+  in **v1** it accepts recursive composition `all_of` (AND) / `any_of` (OR)
+- `nl` clause — natural language; it is **BINDING** only when the counterparty
+  explicitly lists it in `accept ... clauses "cN"`
+- **weight ranking** (`clause.weight`): `rank_proposals` orders proposals by
+  the fraction of contractual weight satisfied. The ranking **guides**, the
+  requestor decides. Identical semantics in Python (reference) and Go.
+- **materialized agreement** (`build_agreement` / `BuildAgreement`): on
+  settlement, the negotiation becomes a canonical content-addressed receipt
+  (`agreement:` + sha256) with the winner, accepted body, and binding clauses —
+  signed by requestor **and** provider, verifiable without replaying the thread.
 
 ## Schema v0 / v1
 
-| Versão | Arquivo | Diferença |
+| Version | File | Difference |
 |---|---|---|
-| v0 | [`schema/parley-v0.schema.json`](schema/parley-v0.schema.json) | `check` folha única (`field` + `op`) |
-| v1 | [`schema/parley-v1.schema.json`](schema/parley-v1.schema.json) | adiciona `check` composto (`all_of`/`any_of`); v0 rejeita composição |
+| v0 | [`schema/parley-v0.schema.json`](schema/parley-v0.schema.json) | single leaf `check` (`field` + `op`) |
+| v1 | [`schema/parley-v1.schema.json`](schema/parley-v1.schema.json) | adds composite `check` (`all_of`/`any_of`); v0 rejects composition |
 
-Seletor automático pelo campo `v` da mensagem, nos dois SDKs.
+Automatic selection by the message `v` field, in both SDKs.
 
-## Runtime de produção (Go)
+## Production runtime (Go)
 
-Os três pilares se conectam num caminho único:
+The three pillars connect into a single path:
 
-1. **KeyStore** gera/carrega pares ed25519 reais (JSON, chmod 0600);
-2. **Registry** publica o Agent Card assinado e serve de âncora de confiança
-   (`WithCardRegistry` no Inbox);
-3. **Supervisor** vigia deadline/fallback e o `CompleteFallbackSink` re-alvoa,
-   re-assina e entrega a escalada automaticamente;
-4. **Agreement** materializa o desfecho assinado por ambos os lados.
+1. **KeyStore** generates/loads real ed25519 key pairs (JSON, chmod 0600);
+2. **Registry** publishes the signed Agent Card and serves as the trust anchor
+   (`WithCardRegistry` in the Inbox);
+3. **Supervisor** watches deadline/fallback and `CompleteFallbackSink`
+   re-targets, re-signs, and delivers the escalation automatically;
+4. **Agreement** materializes the outcome signed by both sides.
 
-Persistência: escritas **atômicas e serializadas entre processos**
-(`AtomicWriteFile`/`lockedWrite` — lock-irmão `.lock` + temp/rename). O Inbox
-aceita política de retenção (`WithRetention(maxAge, maxRecords)`) com sweep
-automático por entrega e `Sweep()` manual.
+Persistence: **atomic writes serialized across processes**
+(`AtomicWriteFile`/`lockedWrite` — sibling `.lock` + temp/rename). The Inbox
+supports a retention policy (`WithRetention(maxAge, maxRecords)`) with
+automatic sweep per delivery and manual `Sweep()`.
 
-## Componentes
+## Components
 
-| Caminho | O que é |
+| Path | What it is |
 |---|---|
-| `parley.py` | Referência Python: parser, canonical JSON, assinatura, `KeyStore`, validação (v0/v1), ranking, thread, acordos |
-| `parley_lsp.py` | **LSP** para `.parley` (zero deps, stdio) + `--check` one-shot |
-| `test_parley.py` | Testes da referência Python (16) |
-| `test_lsp.py` | Testes do LSP com cliente JSON-RPC real (7) |
-| `schema/` | JSON Schemas canônicos (v0 e v1) |
-| `sdk/go/` | SDK Go: parser, validação, ranking, registry, keystore, agreement, transports |
-| `sdk/go/transport/` | Queue + HTTP + **WebSocket** (gorilla), Inbox (retenção), Supervisor |
-| `vscode/` | Extensão VS Code: syntax highlighting, LSP, snippets |
+| `parley.py` | Python reference: parser, canonical JSON, signature, `KeyStore`, validation (v0/v1), ranking, thread, agreements |
+| `parley_lsp.py` | **LSP** for `.parley` (zero deps, stdio) + one-shot `--check` |
+| `test_parley.py` | Python reference tests (16) |
+| `test_lsp.py` | LSP tests with a real JSON-RPC client (7) |
+| `schema/` | Canonical JSON Schemas (v0 and v1) |
+| `sdk/go/` | Go SDK: parser, validation, ranking, registry, keystore, agreement, transports |
+| `sdk/go/transport/` | Queue + HTTP + **WebSocket** (gorilla), Inbox (retention), Supervisor |
+| `vscode/` | VS Code extension: syntax highlighting, LSP, snippets |
 
 ## Quickstart
 
 ```sh
-# referência Python (16 testes)
+# Python reference (16 tests)
 python3 test_parley.py
-python3 parley.py examples/negociacao.parley --thread
+python3 parley.py examples/negotiation.parley --thread
 
-# LSP (7 testes)
+# LSP (7 tests)
 python3 test_lsp.py
-python3 parley_lsp.py --check examples/negociacao.parley   # one-shot
+python3 parley_lsp.py --check examples/negotiation.parley   # one-shot
 python3 parley_lsp.py                                       # server stdio
 
-# SDK Go (suíte completa) + demo E2E com chaves reais
+# Go SDK (full suite) + E2E demo with real keys
 cd sdk/go && go test ./...
 cd sdk/go && go run ./demo
 ```
 
-## LSP — capacidades
+## LSP — capabilities
 
-- `textDocumentSync` full → `publishDiagnostics` a cada open/change
-  - sintaxe (varredura tolerante: **todos** os erros, não só o primeiro)
-  - semântica: `@msgN` fora do alcance, fallback para agente não declarado,
-    peso de cláusula fora de (0,1], `request` sem target, cláusula inexistente no pai
-- `completion` — keywords por contexto (top / capability / mensagem),
-  nomes de capabilities no ato, ids de agentes no `fallback`
-- `hover` — docs de keywords, agentes, capabilities, referências `@msgN`
-- `documentSymbol` — agentes (com provides), capabilities, mensagens
+- `textDocumentSync` full → `publishDiagnostics` on every open/change
+  - syntax (tolerant scan: **all** errors, not just the first)
+  - semantics: `@msgN` out of scope, fallback to an undeclared agent,
+    clause weight outside (0,1], `request` without a target, clause missing in the parent
+- `completion` — context-aware keywords (top / capability / message),
+  capability names on the spot, agent ids in `fallback`
+- `hover` — docs for keywords, agents, capabilities, `@msgN` references
+- `documentSymbol` — agents (with provides), capabilities, messages
 
-**Regra numérica canônica** (protocolo): números serializam por *valor* —
-inteiros puros (`150`, nunca `150.0`), não-inteiros na menor representação
-round-trip (`0.85`). É ela que torna ids/assinaturas independentes de plataforma.
+**Canonical number rule** (protocol): numbers serialize by *value* —
+pure integers (`150`, never `150.0`), non-integers in the shortest round-trip
+representation (`0.85`). This is what makes ids/signatures platform-independent.
 
-## Contribuindo
+## Contributing
 
-Veja [CONTRIBUTING.md](CONTRIBUTING.md) (setup, regras de compatibilidade
-Python↔Go, checklist de PR). Bugs e features: [abrir uma issue](https://github.com/mrschneider/parley/issues).
-Segurança: [SECURITY.md](SECURITY.md). Changelog: [CHANGELOG.md](CHANGELOG.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) (setup, Python↔Go compatibility
+rules, PR checklist). Bugs and features: [open an issue](https://github.com/mrschneider/parley/issues).
+Security: [SECURITY.md](SECURITY.md). Changelog: [CHANGELOG.md](CHANGELOG.md).
 
-## Licença
+## License
 
-MIT — veja [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

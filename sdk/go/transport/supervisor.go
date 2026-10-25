@@ -61,7 +61,7 @@ func CompleteFallbackSink(keyStore *parley.KeyStore, tenant string, inboxes map[
 	return func(to string, raw []byte) *Result {
 		var original parley.Message
 		if err := json.Unmarshal(raw, &original); err != nil {
-			return &Result{Status: StatusRejected, Reason: "supervisor fallback: json inválido: " + err.Error()}
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: invalid json: " + err.Error()}
 		}
 		escalated := DeliverFallback(&original)
 		escalated.To = parley.AgentRef{ID: to, Tenant: original.To.Tenant}
@@ -72,7 +72,7 @@ func CompleteFallbackSink(keyStore *parley.KeyStore, tenant string, inboxes map[
 		}
 		inbox, ok := inboxes[to]
 		if !ok {
-			return &Result{Status: StatusRejected, Reason: "supervisor fallback: inbox não registrado: " + to}
+			return &Result{Status: StatusRejected, Reason: "supervisor fallback: inbox not registered: " + to}
 		}
 		rawOut, err := json.Marshal(signed)
 		if err != nil {
@@ -133,17 +133,17 @@ func (s *Supervisor) RegisterSink(agent string, sink FallbackSink) {
 func (s *Supervisor) Track(raw []byte) (time.Time, error) {
 	var m parley.Message
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return time.Time{}, fmt.Errorf("supervisor: json inválido: %w", err)
+		return time.Time{}, fmt.Errorf("supervisor: invalid json: %w", err)
 	}
 	if m.ID == "" {
-		return time.Time{}, fmt.Errorf("supervisor: mensagem sem id")
+		return time.Time{}, fmt.Errorf("supervisor: message without id")
 	}
 	if m.Deadline == "" {
-		return time.Time{}, fmt.Errorf("supervisor: mensagem sem deadline não é rastreável")
+		return time.Time{}, fmt.Errorf("supervisor: message without deadline is not trackable")
 	}
 	dl, err := time.Parse("2006-01-02T15:04:05Z", m.Deadline)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("supervisor: deadline malformado: %s", m.Deadline)
+		return time.Time{}, fmt.Errorf("supervisor: malformed deadline: %s", m.Deadline)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

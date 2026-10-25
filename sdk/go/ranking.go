@@ -1,49 +1,49 @@
-// PARLEY v0 — Ranking de propostas por weight das cláusulas.
+// PARLEY v0 — Proposal ranking by clause weight.
 //
-// O schema declara clause.weight: "How much this clause matters to the
-// sender (drives negotiation ranking)". Este arquivo implementa a promessa:
-// dado um pedido (request) com cláusulas 'expect' ponderadas e as propostas
-// recebidas (propose/counter), RankProposals devolve a ordenação das
-// propostas pela fração de peso contratual que satisfazem.
+// The schema declares clause.weight: "How much this clause matters to the
+// sender (drives negotiation ranking)". This file implements that promise:
+// given a request with weighted 'expect' clauses and the received proposals
+// (propose/counter), RankProposals returns the ordering of the proposals
+// by the fraction of contractual weight they satisfy.
 //
-// Regras (mesmas semânticas dos contratos híbridos — reportado, nunca
-// rejeição dura; o ranking ORIENTA a escolha, o requestor decide):
+// Rules (same semantics as the hybrid contracts — reported, never a hard
+// rejection; the ranking GUIDES the choice, the requestor decides):
 //
-//   - cláusula 'check' satisfeita:  +weight
-//   - cláusula 'check' violada:     -weight  (contabilizada em violations)
-//   - cláusula 'nl' sem aceite
-//     explícito (id fora de m.Clauses): -weight  (não vinculante => custo)
-//   - cláusula 'nl' com aceite explícito: +weight (binding => crédito)
-//   - cláusulas com weight <= 0 não pontuam (inativas)
-//   - score = peso satisfeito / peso total (0..1); quando há violação de
-//     cláusula com peso positivo, score = 0 (penalidade dura: uma cláusula
-//     importante violada não é compensada por outras satisfeitas)
+//   - 'check' clause satisfied:  +weight
+//   - 'check' clause violated:   -weight  (counted in violations)
+//   - 'nl' clause without explicit accept
+//     (id not in m.Clauses): -weight  (non-binding => cost)
+//   - 'nl' clause with explicit accept: +weight (binding => credit)
+//   - clauses with weight <= 0 do not score (inactive)
+//   - score = satisfied weight / total weight (0..1); when a positive-weight
+//     clause is violated, score = 0 (hard penalty: one important violated
+//     clause is not offset by other satisfied ones)
 //
-// Ordem determinística: score descendente, confidence descendente, id
-// ascendente (estável entre plataformas e execuções).
+// Deterministic order: score descending, confidence descending, id
+// ascending (stable across platforms and runs).
 package parley
 
 import "sort"
 
-// RankEntry é uma proposta avaliada contra o contrato do pedido.
+// RankEntry is one proposal evaluated against the request's contract.
 type RankEntry struct {
 	Proposal   *Message         `json:"proposal"`
 	Score      float64          `json:"score"`
-	Satisfied  []string         `json:"satisfied,omitempty"`  // ids de cláusula creditadas
-	Violations []string         `json:"violations,omitempty"` // ids de cláusula penalizadas
-	Detail     []map[string]any `json:"detail"`               // avaliação cláusula a cláusula
+	Satisfied  []string         `json:"satisfied,omitempty"`  // credited clause ids
+	Violations []string         `json:"violations,omitempty"` // penalized clause ids
+	Detail     []map[string]any `json:"detail"`               // clause-by-clause evaluation
 }
 
-// Ranking é o resultado da ordenação.
+// Ranking is the result of the ordering.
 type Ranking struct {
 	ParentID string      `json:"parent_id"`
-	Total    float64     `json:"total"` // peso total das cláusulas ponderadas
+	Total    float64     `json:"total"` // total weight of the weighted clauses
 	Entries  []RankEntry `json:"entries"`
-	Top      *RankEntry  `json:"top,omitempty"` // nil quando não há propostas
+	Top      *RankEntry  `json:"top,omitempty"` // nil when there are no proposals
 }
 
-// RankProposals ordena as propostas (mensagens com act propose/counter)
-// contra as cláusulas 'expect' do pedido parent, usando clause.weight.
+// RankProposals orders the proposals (messages with act propose/counter)
+// against the parent request's 'expect' clauses, using clause.weight.
 func RankProposals(parent *Message, proposals []*Message) *Ranking {
 	r := &Ranking{Entries: []RankEntry{}}
 	if parent == nil {
@@ -78,7 +78,7 @@ func scoreProposal(parent, p *Message, total float64) RankEntry {
 	anyViolation := false
 	for _, c := range parent.Expect {
 		if c.Weight <= 0 {
-			continue // cláusula inativa: não pontua
+			continue // inactive clause: no score
 		}
 		var ok bool
 		var detail, kind string
@@ -86,9 +86,9 @@ func scoreProposal(parent, p *Message, total float64) RankEntry {
 			kind = "nl"
 			ok = acceptedID(p, c.ID)
 			if ok {
-				detail = "nl aceita explicitamente (binding)"
+				detail = "nl explicitly accepted (binding)"
 			} else {
-				detail = "nl não aceita explicitamente -> não vinculante (penalidade)"
+				detail = "nl not explicitly accepted -> non-binding (penalty)"
 			}
 		} else {
 			kind = "check"

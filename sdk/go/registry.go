@@ -1,18 +1,18 @@
-// PARLEY v0 — Registro de Agent Cards (descoberta de capacidades).
+// PARLEY v0 — Agent Card registry (capability discovery).
 //
-// O registro é apenas um diretório: ele NÃO emite confiança. A confiança
-// vem do card assinado (self-contained trust): Publish exige card válido
-// (assinatura verificada contra a chave pública declarada no próprio card),
-// e Discover retorna cards — o chamador decide se confia (ex.: por
-// reputação, tenant, ou uma raiz de confiança externa).
+// The registry is only a directory: it does NOT mint trust. Trust comes
+// from the signed card (self-contained trust): Publish requires a valid
+// card (signature verified against the public key declared by the card
+// itself), and Discover returns cards — the caller decides whether to
+// trust them (e.g. by reputation, tenant, or an external trust root).
 //
-// Semântica:
-//   - Publish: idempotente para o mesmo card id (re-publicar é no-op);
-//     um card novo para o mesmo (tenant, agent) SUPERSEDE o anterior.
-//   - Revogação: publicar um card com revoked=true (novo id de conteúdo);
-//     Discover filtra cards revogados.
-//   - Discover(tenant, "nome.cap", version): cards válidos, não revogados,
-//     que oferecem a capability com exatamente essa versão.
+// Semantics:
+//   - Publish: idempotent for the same card id (re-publishing is a no-op);
+//     a new card for the same (tenant, agent) SUPERSEDES the previous one.
+//   - Revocation: publishing a card with revoked=true (new content id);
+//     Discover filters out revoked cards.
+//   - Discover(tenant, "name.cap", version): valid, non-revoked cards
+//     offering the capability at exactly that version.
 package parley
 
 import (
@@ -33,23 +33,23 @@ import (
 func VerifyWithKey(m *Message, pub ed25519.PublicKey) (bool, string) {
 	sig := m.Signature
 	if sig == nil {
-		return false, "sem assinatura"
+		return false, "missing signature"
 	}
 	if sig.Alg != "ed25519" {
-		return false, "algoritmo não suportado: " + sig.Alg
+		return false, "unsupported algorithm: " + sig.Alg
 	}
 	sigBytes, err := base64.StdEncoding.DecodeString(sig.Sig)
 	if err != nil {
-		return false, "assinatura base64 inválida"
+		return false, "invalid base64 signature"
 	}
 	canon, err := CanonicalBytes(m)
 	if err != nil {
 		return false, "canonical: " + err.Error()
 	}
 	if ed25519.Verify(pub, canon, sigBytes) {
-		return true, "assinatura válida (ed25519, chave do card)"
+		return true, "valid signature (ed25519, card key)"
 	}
-	return false, "assinatura inválida (ed25519, chave do card)"
+	return false, "invalid signature (ed25519, card key)"
 }
 
 // CardEntry is a card as stored in the registry.
@@ -87,10 +87,10 @@ func capKey(tenant, name string, v int) string {
 func (r *Registry) Publish(c *Card, publisher string, ts time.Time) error {
 	ok, why := VerifyCard(c)
 	if !ok {
-		return fmt.Errorf("parley: registry: card rejeitado: %s", why)
+		return fmt.Errorf("parley: registry: card rejected: %s", why)
 	}
 	if c.ID == "" {
-		return fmt.Errorf("parley: registry: card sem id (use SignCard)")
+		return fmt.Errorf("parley: registry: card without id (use SignCard)")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -161,17 +161,17 @@ func (r *Registry) VerifyMessageWithCard(m *Message) (bool, string) {
 	}
 	card, ok := r.Get(tenant, m.From.ID)
 	if !ok {
-		return false, "card não registrado: " + tenant + "/" + m.From.ID
+		return false, "card not registered: " + tenant + "/" + m.From.ID
 	}
 	if card.Revoked {
-		return false, "card revogado: " + tenant + "/" + m.From.ID
+		return false, "revoked card: " + tenant + "/" + m.From.ID
 	}
 	rawPub, err := base64.StdEncoding.DecodeString(card.Pub.Key)
 	if err != nil {
-		return false, "card: chave pública base64 inválida"
+		return false, "card: invalid base64 public key"
 	}
 	if len(rawPub) != ed25519.PublicKeySize {
-		return false, "card: chave pública inválida"
+		return false, "card: invalid public key"
 	}
 	return VerifyWithKey(m, ed25519.PublicKey(rawPub))
 }
@@ -247,7 +247,7 @@ func (r *Registry) Unmarshal(b []byte) error {
 			return err
 		}
 		if len(triple) != 3 {
-			return fmt.Errorf("parley: registry: entrada inválida")
+			return fmt.Errorf("parley: registry: invalid entry")
 		}
 		var c Card
 		if err := json.Unmarshal(triple[0], &c); err != nil {

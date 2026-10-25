@@ -1,19 +1,19 @@
 ---
 name: Feature request
-about: Sugestão de act, cláusula, transporte ou ferramenta
+about: Suggestion for an act, clause, transport, or tool
 title: "[feature] "
 labels: enhancement
 assignees: ""
 ---
 
-## Problema
+## Problem
 
-<!-- qual limitação do protocolo/SDK você enfrenta -->
+<!-- which protocol/SDK limitation you face -->
 
-## Proposta
+## Proposal
 
-<!-- como deveria funcionar; se mudar o protocolo, diga se afeta v0, v1 ou ambos -->
+<!-- how it should work; if it changes the protocol, say whether it affects v0, v1, or both -->
 
-## Alternativas consideradas
+## Alternatives considered
 
-<!-- se houver -->
+<!-- if any -->

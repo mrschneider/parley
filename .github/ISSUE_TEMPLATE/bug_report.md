@@ -1,27 +1,27 @@
 ---
 name: Bug report
-about: Algo quebrou ou se comportou fora do contrato do protocolo
+about: Something broke or behaved outside the protocol contract
 title: "[bug] "
 labels: bug
 assignees: ""
 ---
 
-## O que aconteceu
+## What happened
 
-<!-- Descrição objetiva + resultado esperado -->
+<!-- Objective description + expected result -->
 
-## Como reproduzir
+## How to reproduce
 
 1.
 2.
 3.
 
-## Ambiente
+## Environment
 
-- SO:
+- OS:
 - Python / Go:
-- Versão do PARLEY (commit/tag):
+- PARLEY version (commit/tag):
 
-## Evidência
+## Evidence
 
-<!-- saída de teste, log, mensagem PARLEY mínima que reproduz -->
+<!-- test output, log, minimal PARLEY message that reproduces it -->

@@ -1,43 +1,44 @@
-// PARLEY v0 — Máquina de estados dos acts (thread de negociação).
+// PARLEY v0 — Act state machine (negotiation thread).
 //
-// Os 11 acts do schema são os eventos de uma conversa; este arquivo dá a
-// conversa um estado: uma Thread de negociação é aberta por um request
-// (com target) e percorre os acts segundo uma gramática mínima, com
-// terminal explícito (accept / commit / reject / cancel) e loops de
-// negociação (propose/counter) com teto configurável.
+// The schema's 11 acts are the events of a conversation; this file gives
+// the conversation a state: a negotiation Thread is opened by a request
+// (with target) and walks the acts under a minimal grammar, with an
+// explicit terminal (accept / commit / reject / cancel) and negotiation
+// loops (propose/counter) with a configurable cap.
 //
-// Semântica (espelha a referência Python, byte a byte em decisões):
+// Semantics (mirrors the Python reference, byte for byte in decisions):
 //
-//   - open:  só request com target (o contrato de uma negociação nasce de
-//     um pedido; inform/ask não abrem thread)
-//   - offer: propose ou counter; counter exige que já tenha havido oferta
-//     anterior (não se "contra-oferece" o vazio)
-//   - final: accept / commit / reject / cancel -> estado terminal; qualquer
-//     ato subsequente é inválido (thread encerrada)
-//   - reject/cancel também encerram a negotiation (não há "rejeito, e
-//     depois...?")
-//   - delegate: o agente reencaminha o assunto; a thread segue (o
-//     reencaminhado responde), mas o ato é registrado como delegação
-//   - inform/ask/verify: atos laterais — informam sem mudar o estado
-//     (a thread não é sobre eles)
-//   - loop cap: N propostas/counter consecutivas sem final -> o próximo
-//     offer é inválido (negociações não terminam; o cap é um teto
-//     pragmático, configurável)
+//   - open:  only a request with target (a negotiation's contract is born
+//     from a request; inform/ask do not open a thread)
+//   - offer: propose or counter; counter requires a previous offer
+//     (you do not "counter-offer" the empty)
+//   - final: accept / commit / reject / cancel -> terminal state; any
+//     subsequent act is invalid (thread closed)
+//   - reject/cancel also end the negotiation (there is no "I reject, and
+//     then...?")
+//   - delegate: the agent forwards the subject; the thread continues (the
+//     delegate replies), but the act is recorded as a delegation
+//   - inform/ask/verify: lateral acts — they inform without changing the
+//     state (the thread is not about them)
+//   - loop cap: N consecutive proposals/counters without an end -> the
+//     next offer is invalid (negotiations do not terminate; the cap is a
+//     pragmatic, configurable ceiling)
 //
-// A Thread não fabrica confiança: ela só organiza a gramática. Assinatura,
-// id de conteúdo e contrato híbrido continuam sendo o que dão garantia.
+// The Thread does not fabricate trust: it only organizes the grammar.
+// Signature, content id and the hybrid contract remain what provide the
+// guarantees.
 package parley
 
 import "fmt"
 
-// Estado da thread de negociação.
+// State of the negotiation thread.
 type ThreadState string
 
 const (
-	StateNew         ThreadState = "new"         // ainda não aberta
-	StateNegotiating ThreadState = "negotiating" // em curso
-	StateSettled     ThreadState = "settled"     // accept/commit (acordo)
-	StateRejected    ThreadState = "rejected"    // reject/cancel (sem acordo)
+	StateNew         ThreadState = "new"         // not opened yet
+	StateNegotiating ThreadState = "negotiating" // in progress
+	StateSettled     ThreadState = "settled"     // accept/commit (agreement)
+	StateRejected    ThreadState = "rejected"    // reject/cancel (no agreement)
 )
 
 // Terminal states: after one of these, no further act is valid.
@@ -78,7 +79,7 @@ func NewThread(cap int) *Thread {
 // describing the first grammar violation (the message is NOT applied).
 func (t *Thread) Apply(m *Message) error {
 	if m == nil {
-		return fmt.Errorf("thread: mensagem nil")
+		return fmt.Errorf("thread: nil message")
 	}
 	switch t.State {
 	case StateNew:
@@ -86,14 +87,14 @@ func (t *Thread) Apply(m *Message) error {
 	case StateNegotiating:
 		return t.step(m)
 	default: // settled / rejected
-		return fmt.Errorf("thread %s: encerrada em %s — ato '%s' (%s) inválido",
+		return fmt.Errorf("thread %s: closed at %s — act '%s' (%s) invalid",
 			t.ID, t.State, m.Act, m.ID)
 	}
 }
 
 func (t *Thread) open(m *Message) error {
 	if m.Act != "request" || m.Target == "" {
-		return fmt.Errorf("thread: open exige 'request' com target (obtido '%s' %s)", m.Act, m.ID)
+		return fmt.Errorf("thread: open requires 'request' with target (got '%s' %s)", m.Act, m.ID)
 	}
 	t.ID = m.ID
 	t.Target = m.Target
@@ -110,7 +111,7 @@ func (t *Thread) step(m *Message) error {
 		}
 	case "counter":
 		if t.LastOffer == "" {
-			return fmt.Errorf("thread: 'counter' exige oferta anterior (thread %s, msg %s)", t.ID, m.ID)
+			return fmt.Errorf("thread: 'counter' requires a previous offer (thread %s, msg %s)", t.ID, m.ID)
 		}
 		if err := t.offer(m); err != nil {
 			return err
@@ -122,20 +123,20 @@ func (t *Thread) step(m *Message) error {
 		t.State = StateRejected
 		t.trace(m)
 	case "delegate":
-		// o assunto segue com o reencaminhado; a thread não muda de estado
+		// the subject continues with the delegate; the thread does not change state
 		t.trace(m)
 	case "inform", "ask", "verify":
-		// atos laterais: registrados, sem mudança de estado
+		// lateral acts: recorded, no state change
 		t.trace(m)
 	default:
-		return fmt.Errorf("thread: ato '%s' não reconhecido (msg %s)", m.Act, m.ID)
+		return fmt.Errorf("thread: act '%s' not recognized (msg %s)", m.Act, m.ID)
 	}
 	return nil
 }
 
 func (t *Thread) offer(m *Message) error {
 	if t.OfferCount+1 > t.Cap {
-		return fmt.Errorf("thread: teto de ofertas excedido (%d) — negociação sem final (thread %s, msg %s)",
+		return fmt.Errorf("thread: offer cap exceeded (%d) — negotiation without end (thread %s, msg %s)",
 			t.Cap, t.ID, m.ID)
 	}
 	t.OfferCount++

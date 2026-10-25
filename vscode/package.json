@@ -1,7 +1,7 @@
 {
   "name": "parley",
   "displayName": "PARLEY",
-  "description": "Linguagem/protocolo PARLEY v0 para comunicação entre agentes de IA: sintaxe, LSP e snippets.",
+  "description": "PARLEY v0 language/protocol for AI agent communication: syntax, LSP and snippets.",
   "version": "0.1.0",
   "publisher": "parley",
   "engines": { "vscode": "^1.80.0" },

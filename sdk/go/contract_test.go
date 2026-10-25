@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// capRoute mirrors the route.plan capability of examples/negociacao.parley:
+// capRoute mirrors the route.plan capability of examples/negotiation.parley:
 // inputs origin/dest (Location, domain type), output route (Route).
 func capRoute() *Capability {
 	return &Capability{
@@ -29,30 +29,30 @@ func capPriced() *Capability {
 }
 
 func TestBodyContractRequestInputs(t *testing.T) {
-	// request: body deve satisfazer os INPUTS da capability
+	// request: body must satisfy the capability INPUTS
 	m := NewMessage("planner-42", "dispatcher-7", time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC))
 	m.Act = "request"
 	m.Target = "route.plan"
 	m.Body = map[string]any{"origin": "Lisboa", "dest": "Porto"}
 	r := BodyContract(m, capRoute())
 	if !r["ok"].(bool) {
-		t.Fatalf("request com inputs completos deveria passar: %v", r)
+		t.Fatalf("request with complete inputs should pass: %v", r)
 	}
 
-	// input obrigatório ausente -> violação
+	// required input missing -> violation
 	m2 := *m
 	m2.Body = map[string]any{"origin": "Lisboa"}
 	r2 := BodyContract(&m2, capRoute())
 	if r2["ok"].(bool) {
-		t.Fatal("input 'dest' ausente deveria violar o contrato de input")
+		t.Fatal("input 'dest' missing should violate the input contract")
 	}
 	if len(r2["violations"].([]string)) != 1 {
-		t.Fatalf("esperava 1 violação, obtive %v", r2["violations"])
+		t.Fatalf("expected 1 violation, got %v", r2["violations"])
 	}
 }
 
 func TestBodyContractProposeOutputs(t *testing.T) {
-	// propose: body deve carregar os OUTPUTS declarados
+	// propose: body must carry the declared OUTPUTS
 	m := NewMessage("dispatcher-7", "planner-42", time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC))
 	m.Act = "propose"
 	m.Target = "route.plan"
@@ -62,18 +62,18 @@ func TestBodyContractProposeOutputs(t *testing.T) {
 	}
 	r := BodyContract(m, capRoute())
 	if !r["ok"].(bool) {
-		t.Fatalf("propose com output 'route' presente deveria passar: %v", r)
+		t.Fatalf("propose with output 'route' present should pass: %v", r)
 	}
-	// 'cost_eur' não declarado -> warning (mundo aberto), não violação
+	// 'cost_eur' not declared -> warning (open world), not a violation
 	if len(r["warnings"].([]string)) != 1 {
-		t.Fatalf("esperava 1 warning (campo não declarado), obtive %v", r["warnings"])
+		t.Fatalf("expected 1 warning (undeclared field), got %v", r["warnings"])
 	}
-	// output ausente -> warning, não violação (provider pode omitir opcional)
+	// output missing -> warning, not a violation (provider may omit an optional)
 	m2 := *m
 	m2.Body = map[string]any{"cost_eur": 1.4}
 	r2 := BodyContract(&m2, capRoute())
 	if r2["ok"] != true {
-		t.Fatalf("output ausente é reportado, não imposto: %v", r2)
+		t.Fatalf("missing output is reported, not enforced: %v", r2)
 	}
 }
 
@@ -82,39 +82,39 @@ func TestBodyContractTypes(t *testing.T) {
 	m.Act = "request"
 	m.Target = "fare.quote"
 
-	// tipos primitivos corretos
+	// correct primitive types
 	m.Body = map[string]any{"legs": float64(3), "fast": true}
 	if r := BodyContract(m, capPriced()); !r["ok"].(bool) {
-		t.Fatalf("tipos corretos deveriam passar: %v", r)
+		t.Fatalf("correct types should pass: %v", r)
 	}
 
-	// tipo errado (string onde INT) -> violação
+	// wrong type (string where INT) -> violation
 	m2 := *m
-	m2.Body = map[string]any{"legs": "três", "fast": true}
+	m2.Body = map[string]any{"legs": "three", "fast": true}
 	r2 := BodyContract(&m2, capPriced())
 	if r2["ok"].(bool) {
-		t.Fatal("legs='três' (STRING onde INT) deveria violar")
+		t.Fatal("legs='three' (STRING where INT) should violate")
 	}
 
-	// float não inteiro onde INT -> violação
+	// non-integer float where INT -> violation
 	m3 := *m
 	m3.Body = map[string]any{"legs": 3.5, "fast": true}
 	if r3 := BodyContract(&m3, capPriced()); r3["ok"].(bool) {
-		t.Fatal("legs=3.5 (float) onde INT deveria violar")
+		t.Fatal("legs=3.5 (float) where INT should violate")
 	}
 
-	// bool onde NUMBER -> violação (e NUMBER onde STRING)
+	// bool where NUMBER -> violation (and NUMBER where STRING)
 	m4 := *m
-	m4.Body = map[string]any{"legs": float64(2), "fast": "sim"}
+	m4.Body = map[string]any{"legs": float64(2), "fast": "yes"}
 	if r4 := BodyContract(&m4, capPriced()); r4["ok"].(bool) {
-		t.Fatal("fast='sim' (STRING onde BOOL) deveria violar")
+		t.Fatal("fast='yes' (STRING where BOOL) should violate")
 	}
 
-	// nil -> violação (campo presente mas nulo)
+	// nil -> violation (field present but null)
 	m5 := *m
 	m5.Body = map[string]any{"legs": nil, "fast": true}
 	if r5 := BodyContract(&m5, capPriced()); r5["ok"].(bool) {
-		t.Fatal("legs=null deveria violar (campo nulo)")
+		t.Fatal("legs=null should violate (null field)")
 	}
 }
 
@@ -127,65 +127,65 @@ func TestBodyContractKindSelection(t *testing.T) {
 	}
 	for act, want := range cases {
 		if got := ContractKind(act); got != want {
-			t.Errorf("ContractKind(%q) = %q, esperado %q", act, got, want)
+			t.Errorf("ContractKind(%q) = %q, expected %q", act, got, want)
 		}
 	}
 	if ContractKind("ask") != "" || ContractKind("delegate") != "" {
-		t.Error("acts sem contrato de corpo deveriam retornar vazio")
+		t.Error("acts without a body contract should return empty")
 	}
-	// act sem contrato: nenhum lado é checado
+	// act without a contract: neither side is checked
 	m := NewMessage("a", "b", time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC))
 	m.Act = "ask"
 	m.Target = "route.plan"
 	m.Body = map[string]any{"x": 1}
 	r := BodyContract(m, capRoute())
 	if !r["ok"].(bool) {
-		t.Fatalf("act 'ask' não deve acionar contrato de corpo: %v", r)
+		t.Fatalf("act 'ask' must not trigger a body contract: %v", r)
 	}
 }
 
 func TestValidateWithBodyContract(t *testing.T) {
-	// Validate com contracts: request com body fora do contrato -> warning
+	// Validate with contracts: request with body outside the contract -> warning
 	m := NewMessage("planner-42", "dispatcher-7", time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC))
 	m.Tenant = "acme"
 	m.Act = "request"
 	m.Target = "route.plan"
-	m.Body = map[string]any{"origin": "Lisboa"} // 'dest' ausente
+	m.Body = map[string]any{"origin": "Lisboa"} // 'dest' missing
 	AssignID(m)
 	signed := Sign(m, "planner-42", "acme")
 	contracts := map[string]*Capability{"route.plan": capRoute()}
 
 	r := ValidateWith(signed, nil, time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC), contracts)
 	if !r["schema_ok"].(bool) || !r["signature_ok"].(bool) {
-		t.Fatalf("mensagem deveria validar schema/assinatura: %v", r)
+		t.Fatalf("message should validate schema/signature: %v", r)
 	}
 	bc, ok := r["body_contract"].(map[string]any)
 	if !ok {
-		t.Fatal("body_contract ausente no resultado do Validate")
+		t.Fatal("body_contract missing from the Validate result")
 	}
 	if bc["ok"].(bool) {
-		t.Fatal("body sem 'dest' deveria violar o contrato de input")
+		t.Fatal("body without 'dest' should violate the input contract")
 	}
 	warns := r["warnings"].([]string)
 	found := false
 	for _, w := range warns {
-		if strings.Contains(w, "contrato de corpo") {
+		if strings.Contains(w, "body contract") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("violação de contrato de corpo não reportada em warnings: %v", warns)
+		t.Fatalf("body contract violation not reported in warnings: %v", warns)
 	}
 
-	// sem contracts: nenhum body_contract no resultado (comportamento antigo)
+	// without contracts: no body_contract in the result (legacy behavior)
 	r2 := Validate(signed, nil, time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC))
 	if _, ok := r2["body_contract"]; ok {
-		t.Fatal("Validate sem contracts não deve produzir body_contract")
+		t.Fatal("Validate without contracts must not produce body_contract")
 	}
 }
 
 func TestValidateWithBodyContractPropose(t *testing.T) {
-	// propose com output 'route' presente: contrato de output ok
+	// propose with output 'route' present: output contract ok
 	m := NewMessage("dispatcher-7", "planner-42", time.Date(2026, 10, 23, 9, 5, 0, 0, time.UTC))
 	m.Tenant = "acme"
 	m.Act = "propose"
@@ -197,6 +197,6 @@ func TestValidateWithBodyContractPropose(t *testing.T) {
 	r := ValidateWith(signed, nil, time.Date(2026, 10, 23, 9, 5, 0, 0, time.UTC), contracts)
 	bc := r["body_contract"].(map[string]any)
 	if !bc["ok"].(bool) {
-		t.Fatalf("propose com 'route' presente deveria satisfazer o output: %v", bc)
+		t.Fatalf("propose with 'route' present should satisfy the output: %v", bc)
 	}
 }

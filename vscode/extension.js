@@ -1,4 +1,4 @@
-// PARLEY v0 — extension VS Code: sobe o LSP (python3 parley_lsp.py) via stdio.
+// PARLEY v0 — VS Code extension: starts the LSP (python3 parley_lsp.py) via stdio.
 const fs = require("fs");
 const path = require("path");
 const {
@@ -27,7 +27,7 @@ function activate(context) {
     const script = findServerScript(context, document);
     if (!script) {
       return void context.workspace.showInformationMessage(
-        "PARLEY LSP: parley_lsp.py não encontrado (esperado em ~/parley/parley_lsp.py)");
+        "PARLEY LSP: parley_lsp.py not found (expected at ~/parley/parley_lsp.py)");
     }
     const serverOptions = new Executable("python3", [script]);
     const clientOptions = new LanguageClientOptions({

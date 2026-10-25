@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-PARLEY v0 — linguagem/protocolo de comunicação entre agentes de IA.
-Linguagem de domínio específica, agnóstica de plataforma (HTTP, WebSocket, filas).
+PARLEY v0 — agent-to-agent communication language/protocol.
+Domain-specific language, platform-agnostic (HTTP, WebSocket, queues).
 
-Modelo de confiança (multi-tenant, agentes NÃO confiáveis):
-  - id de mensagem endereçado por conteúdo (sha256) -> idempotência e detecção de replay
-  - assinatura sobre a serialização canônica (todo campo exceto 'signature')
-  - 'tenant' no envelope, exigível pelo validador
-  - provenance: cadeia de ids que fundamentam a mensagem
-Contratos híbridos:
-  - cláusula 'check': validada por máquina (caminho no body, operador, valor)
-  - cláusula 'nl':   escrita em linguagem natural; só se torna VINCULANTE quando o
-                     contraparte a lista explicitamente em ACCEPT (CLAUSES ...)
+Trust model (multi-tenant, untrusted agents):
+  - content-addressed message id (sha256) -> idempotency and replay detection
+  - signature over the canonical serialization (every field except 'signature')
+  - 'tenant' in the envelope, enforceable by the validator
+  - provenance: chain of ids backing the message
+Hybrid contracts:
+  - 'check' clause: machine-validated (path in body, operator, value)
+  - 'nl' clause:   written in natural language; only becomes BINDING when the
+                    counterparty lists it explicitly in ACCEPT (CLAUSES ...)
 """
 from __future__ import annotations
 import base64
@@ -34,19 +34,19 @@ except Exception:
     _HAVE_ED25519 = False
 
 def _derive_key(agent_id: str, tenant: str = "default"):
-    """Chave de teste determinística derivada da identidade.
-    Produção: usar KMS / carteira de chaves real — NUNCA derivar de id."""
+    """Deterministic test key derived from the identity.
+    Production: use a KMS / real key wallet — NEVER derive from an id."""
     seed = hashlib.sha256(f"{tenant}:{agent_id}".encode()).digest()
     if _HAVE_ED25519:
         return ("ed25519", Ed25519PrivateKey.from_private_bytes(seed))
     return ("hmac-sha256", seed)
 
 class KeyStore:
-    """Carteira de chaves ed25519 reais (caminho de produção).
+    """Wallet of real ed25519 keys (production path).
 
-    O arquivo guarda a seed privada e deve ter permissão 0600: quem tem o
-    arquivo TEM a identidade do agente. Em produção, o caminho ideal vive
-    em disco criptografado/secret manager — o formato é o mesmo."""
+    The file stores the private seed and must be mode 0600: whoever has the
+    file HAS the agent's identity. In production, the ideal path lives on
+    encrypted disk / a secret manager — the format is the same."""
     ALG = "ed25519"
 
     def __init__(self):
@@ -58,7 +58,7 @@ class KeyStore:
 
     def generate(self, agent_id: str, tenant: str = "default") -> Ed25519PrivateKey:
         if not _HAVE_ED25519:
-            raise RuntimeError("cryptography não disponível para ed25519")
+            raise RuntimeError("cryptography not available for ed25519")
         key = Ed25519PrivateKey.generate()  # type: ignore[misc]
         self._keys[self._key(tenant, agent_id)] = key
         return key
@@ -72,9 +72,9 @@ class KeyStore:
     def public_bytes(self, agent_id: str, tenant: str = "default") -> str:
         key = self.get(agent_id, tenant)
         if key is None:
-            raise KeyError(f"chave ausente: {tenant}/{agent_id}")
+            raise KeyError(f"missing key: {tenant}/{agent_id}")
         if not _HAVE_ED25519:
-            raise RuntimeError("cryptography não disponível para ed25519")
+            raise RuntimeError("cryptography not available for ed25519")
         pub = key.public_key().public_bytes(
             serialization.Encoding.Raw,  # type: ignore[misc]
             serialization.PublicFormat.Raw)  # type: ignore[misc]
@@ -83,7 +83,7 @@ class KeyStore:
     def sign_message(self, msg: dict, agent_id: str, tenant: str = "default") -> dict:
         key = self.get(agent_id, tenant)
         if key is None:
-            raise KeyError(f"chave ausente: {tenant}/{agent_id}")
+            raise KeyError(f"missing key: {tenant}/{agent_id}")
         out = dict(msg)
         out["signature"] = {
             "alg": self.ALG,
@@ -94,7 +94,7 @@ class KeyStore:
 
     def save(self, path: str) -> None:
         if not _HAVE_ED25519:
-            raise RuntimeError("cryptography não disponível para ed25519")
+            raise RuntimeError("cryptography not available for ed25519")
         entries = []
         for (tenant, agent), key in sorted(self._keys.items()):
             seed = key.private_bytes(
@@ -116,22 +116,22 @@ class KeyStore:
         except FileNotFoundError:
             return
         if not _HAVE_ED25519:
-            raise RuntimeError("cryptography não disponível para ed25519")
+            raise RuntimeError("cryptography not available for ed25519")
         for e in entries:
             seed = base64.b64decode(e["seed_b64"])
             self._keys[self._key(e.get("tenant", "default"), e["agent"])] = \
                 Ed25519PrivateKey.from_private_bytes(seed)  # type: ignore[misc]
 
-# ---------------------------------------------------------------- serialização
+# ---------------------------------------------------------------- serialization
 #
-# CANONICAL NUMBER RULE (protocolo): valores são serializados por VALOR, não
-# por token — inteiros como inteiros puros ("150", nunca "150.0" nem "1.0"),
-# não-inteiros com a menor representação round-trip ("0.85"). Python e Go
-# DEVEM seguir esta regra; é ela que torna os bytes canônicos (e portanto
-# ids e assinaturas) independentes de plataforma.
+# CANONICAL NUMBER RULE (protocol): values are serialized by VALUE, not
+# by token — integers as pure integers ("150", never "150.0" nor "1.0"),
+# non-integers with the smallest round-trip representation ("0.85"). Python and Go
+# MUST follow this rule; it is what makes the canonical bytes (and therefore
+# ids and signatures) platform-independent.
 
 def canonical_json(v) -> str:
-    """Serialização canônica de qualquer valor JSON (regra numérica canônica)."""
+    """Canonical serialization of any JSON value (canonical number rule)."""
     if v is None:
         return "null"
     if v is True:
@@ -152,15 +152,15 @@ def canonical_json(v) -> str:
             for k in sorted(v)) + "}"
     if isinstance(v, (list, tuple)):
         return "[" + ",".join(canonical_json(x) for x in v) + "]"
-    raise TypeError(f"valor não serializável canonicamente: {type(v)!r}")
+    raise TypeError(f"value not canonically serializable: {type(v)!r}")
 
 def canonical_bytes(msg: dict) -> bytes:
-    """Serialização canônica: tudo exceto 'signature', chaves ordenadas, compacto."""
+    """Canonical serialization: everything except 'signature', sorted keys, compact."""
     body = {k: v for k, v in msg.items() if k != "signature"}
     return canonical_json(body).encode("utf-8")
 
 def atomic_write_json(path: str, value, mode: int = 0o644) -> None:
-    """Escrita atômica com lock entre processos (arquivo-irmão .lock)."""
+    """Atomic write with a cross-process lock (sibling .lock file)."""
     lock_path = path + ".lock"
     deadline = datetime.now().timestamp() + 2.0
     while True:
@@ -187,7 +187,7 @@ def atomic_write_json(path: str, value, mode: int = 0o644) -> None:
             except (AttributeError, OSError):
                 if os.name != "nt":
                     raise
-                # Windows não suporta fchmod; mkstemp já cria restrito ao usuário
+                # Windows does not support fchmod; mkstemp already creates the file user-restricted
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
                 f.flush()
@@ -221,7 +221,7 @@ def sign(msg: dict, agent_id: str, tenant: str = "default") -> dict:
 def verify(msg: dict) -> tuple[bool, str]:
     sig = msg.get("signature")
     if not sig:
-        return False, "sem assinatura"
+        return False, "missing signature"
     alg, key_id = sig.get("alg"), sig.get("key", "")
     tenant = msg.get("tenant", "default")
     data = canonical_bytes(msg)
@@ -236,24 +236,24 @@ def verify(msg: dict) -> tuple[bool, str]:
             try:
                 Ed25519PublicKey.from_public_bytes(raw_pub).verify(
                     base64.b64decode(sig["sig"]), data)
-                return True, "assinatura válida (ed25519, chave do card)"
+                return True, "valid signature (ed25519, card key)"
             except Exception as e:
-                return False, f"assinatura inválida: {e}"
+                return False, f"invalid signature: {e}"
     agent_id = key_id.split(":", 1)[1] if ":" in key_id else key_id
     if alg == "ed25519" and _HAVE_ED25519:
         alg2, key = _derive_key(agent_id, tenant)
         try:
             key.public_key().verify(base64.b64decode(sig["sig"]), data)
-            return True, "assinatura válida (ed25519)"
+            return True, "valid signature (ed25519)"
         except Exception as e:
-            return False, f"assinatura inválida: {e}"
+            return False, f"invalid signature: {e}"
     if alg == "hmac-sha256":
         alg2, key = _derive_key(agent_id, tenant)
         expect = hmac.new(key, data, hashlib.sha256).digest()
         if hmac.compare_digest(expect, base64.b64decode(sig["sig"])):
-            return True, "assinatura válida (hmac-sha256)"
-        return False, "assinatura inválida (hmac)"
-    return False, f"algoritmo não suportado: {alg}"
+            return True, "valid signature (hmac-sha256)"
+        return False, "invalid signature (hmac)"
+    return False, f"unsupported algorithm: {alg}"
 
 # ---------------------------------------------------------------- lexer/parser
 ACTS = {"inform", "ask", "request", "propose", "accept", "reject", "counter",
@@ -270,7 +270,7 @@ def parse_value(s: str):
         try:
             return json.loads(s)
         except json.JSONDecodeError:
-            if s.startswith("["):  # lista solta: ["a","b"] ou [a, b, c]
+            if s.startswith("["):  # loose list: ["a","b"] or [a, b, c]
                 inner = s[1:-1]
                 return [parse_value(x) for x in split_top(inner)]
             raise
@@ -322,9 +322,9 @@ def _new_msg(doc: ParleyDoc, frm: str, to: str) -> dict:
 def parse_text(src: str) -> ParleyDoc:
     doc = ParleyDoc()
     cur_agent = None      # alias
-    cur_prov = None       # name da capability em declaração
-    cur_msg = None        # mensagem em construção
-    pending_act = None    # ato + target da linha de ato
+    cur_prov = None       # capability name being declared
+    cur_msg = None        # message under construction
+    pending_act = None    # act + target of the act line
 
     for ln, raw in enumerate(src.splitlines(), 1):
         line = raw.split("#", 1)[0].rstrip() if not raw.lstrip().startswith("#") else ""
@@ -333,18 +333,18 @@ def parse_text(src: str) -> ParleyDoc:
         s = line.strip()
         first = s.split(None, 1)[0].upper()
 
-        # ---- declarações de capacidade -------------------------------------
+        # ---- capability declarations -------------------------------------
         if first == "AGENT":
             m = re.match(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', s, re.I)
             if not m:
-                raise SyntaxError(f"ln {ln}: AGENT malformado: {s}")
+                raise SyntaxError(f"ln {ln}: malformed AGENT: {s}")
             cur_agent = m.group(2)
             doc.agents[cur_agent] = {"id": m.group(1), "provides": []}
             continue
         if first == "PROVIDES":
             m = re.match(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', s, re.I)
             if not m or not cur_agent:
-                raise SyntaxError(f"ln {ln}: PROVIDES malformado: {s}")
+                raise SyntaxError(f"ln {ln}: malformed PROVIDES: {s}")
             cur_prov = m.group(1)
             cap = doc.capabilities.setdefault(cur_prov, {
                 "version": int(m.group(2)), "inputs": [], "outputs": [],
@@ -356,7 +356,7 @@ def parse_text(src: str) -> ParleyDoc:
         if first in ("INPUT", "OUTPUT") and cur_prov:
             m = re.match(r'^INPUT\s+(\w+)\s*:\s*(\w+)$|^OUTPUT\s+(\w+)\s*:\s*(\w+)$', s, re.I)
             if not m:
-                raise SyntaxError(f"ln {ln}: INPUT/OUTPUT malformado: {s}")
+                raise SyntaxError(f"ln {ln}: malformed INPUT/OUTPUT: {s}")
             kind = "inputs" if first == "INPUT" else "outputs"
             g = m.groups()
             name, typ = (g[0], g[1]) if kind == "inputs" else (g[2], g[3])
@@ -365,7 +365,7 @@ def parse_text(src: str) -> ParleyDoc:
         if first == "COST" and cur_prov:
             m = re.match(r'^COST\s+(\w+)\s*(<=|>=|<|>|==)\s*(.+)$', s, re.I)
             if not m:
-                raise SyntaxError(f"ln {ln}: COST malformado: {s}")
+                raise SyntaxError(f"ln {ln}: malformed COST: {s}")
             doc.capabilities[cur_prov]["cost"].append(
                 {"field": m.group(1), "op": OPS[m.group(2)], "value": parse_value(m.group(3))})
             continue
@@ -373,13 +373,13 @@ def parse_text(src: str) -> ParleyDoc:
             doc.capabilities[cur_prov]["default_confidence"] = parse_value(s.split(None, 1)[1])
             continue
 
-        # ---- mensagens -------------------------------------------------------
+        # ---- messages -------------------------------------------------------
         hm = HEADER_RE.match(s)
         if hm and hm.group(1) in doc.agents and hm.group(2) in doc.agents:
             cur_msg = _new_msg(doc, hm.group(1), hm.group(2))
             continue
         if cur_msg is None:
-            raise SyntaxError(f"ln {ln}: linha fora de contexto (agente/mensagem): {s}")
+            raise SyntaxError(f"ln {ln}: line out of context (agent/message): {s}")
         m = cur_msg
 
         if first in {a.upper() for a in ACTS}:
@@ -436,7 +436,7 @@ def parse_text(src: str) -> ParleyDoc:
             else:
                 cm = re.match(r"^([A-Za-z_][\w.]*)\s*(<=|>=|<|>|==|in|not_null|~)\s*(.+)$", rest)
                 if not cm:
-                    raise SyntaxError(f"ln {ln}: EXPECT malformado: {s}")
+                    raise SyntaxError(f"ln {ln}: malformed EXPECT: {s}")
                 clause["check"] = {"field": cm.group(1), "op": OPS[cm.group(2)],
                                    "value": parse_value(cm.group(3))}
             clause["weight"] = weight
@@ -445,9 +445,9 @@ def parse_text(src: str) -> ParleyDoc:
         if first == "CLAUSES":
             m["clauses"] = [x.strip().strip('"') for x in split_top(s.split(None, 1)[1])]
             continue
-        raise SyntaxError(f"ln {ln}: token desconhecido: {first!r} em {s}")
+        raise SyntaxError(f"ln {ln}: unknown token: {first!r} in {s}")
 
-    # ids de cláusula estáveis + ids de mensagem endereçados por conteúdo
+    # stable clause ids + content-addressed message ids
     for m in doc.messages:
         for i, c in enumerate(m.get("expect", []), 1):
             c.setdefault("id", f"c{i}")
@@ -455,13 +455,13 @@ def parse_text(src: str) -> ParleyDoc:
     return doc
 
 def finalize(doc: ParleyDoc) -> list[dict]:
-    """Gera ids de mensagem endereçados por conteúdo (idempotência/replay)."""
+    """Generates content-addressed message ids (idempotency/replay)."""
     for m in doc.messages:
         tmp = {k: v for k, v in m.items() if k not in ("id", "signature")}
         h = hashlib.sha256(canonical_bytes(tmp)).hexdigest()[:16]
         m["id"] = f"msg:{h}"
         m.pop("_signer", None)
-    # resolve referências @msgN -> id da N-ésima mensagem (correlação legível)
+    # resolve @msgN references -> id of the Nth message (readable correlation)
     for m in doc.messages:
         if m.get("parent", "").startswith("@msg"):
             n = int(m["parent"][4:])
@@ -471,7 +471,7 @@ def finalize(doc: ParleyDoc) -> list[dict]:
                                for p in m["provenance"]]
     return doc.messages
 
-# ---------------------------------------------------------------- validação
+# ---------------------------------------------------------------- validation
 def get_path(obj: dict, path: str):
     cur = obj
     for part in path.split("."):
@@ -495,7 +495,7 @@ def check_leaf(chk: dict, msg: dict) -> tuple[bool, str]:
         ok = actual is not None and re.search(val, str(actual)) is not None
     else:
         if actual is None:
-            return False, f"campo ausente: {field}"
+            return False, f"missing field: {field}"
         ok = {"lt": actual < val, "lte": actual <= val, "gt": actual > val,
               "gte": actual >= val, "eq": actual == val}[op]
     return ok, f"{field}={actual!r} ({op} {val!r})"
@@ -503,7 +503,7 @@ def check_leaf(chk: dict, msg: dict) -> tuple[bool, str]:
 def check_clause(clause: dict, msg: dict) -> tuple[bool, str]:
     chk = clause.get("check")
     if not chk:
-        return True, "nl (sem verificação de máquina)"
+        return True, "nl (no machine check)"
     if "all_of" in chk or "any_of" in chk:
         details = {"all_of": [], "any_of": []}
         all_ok, any_ok, present = True, False, False
@@ -526,18 +526,18 @@ def check_clause(clause: dict, msg: dict) -> tuple[bool, str]:
 # ---------------------------------------------------------------- ranking
 #
 # clause.weight: "How much this clause matters to the sender (drives
-# negotiation ranking)". rank_proposals implementa a promessa: dado um
-# request com cláusulas 'expect' ponderadas e as propostas recebidas
-# (propose/counter), devolve a ordenação pela fração de peso contratual
-# satisfeita. Mesmas semânticas dos contratos híbridos: reportado, nunca
-# rejeição dura — o ranking ORIENTA, o requestor decide.
+# negotiation ranking)". rank_proposals delivers the promise: given a
+# request with weighted 'expect' clauses and the received proposals
+# (propose/counter), it returns the ordering by the fraction of contractual
+# weight satisfied. Same semantics as the hybrid contracts: reported, never a
+# hard rejection — the ranking GUIDES, the requestor decides.
 #
-#   check ok: +weight | check violada: -weight (violation)
-#   nl não aceita: -weight (não vinculante) | nl aceita: +weight (binding)
-#   weight <= 0: inativa (não pontua)
-#   score = satisfeito/total (0..1); 0 quando há violação com peso > 0
+#   check ok: +weight | check violated: -weight (violation)
+#   nl not accepted: -weight (non-binding) | nl accepted: +weight (binding)
+#   weight <= 0: inactive (does not score)
+#   score = satisfied/total (0..1); 0 when there is a violation with weight > 0
 #
-# Ordem determinística: score desc, confidence desc, id asc.
+# Deterministic order: score desc, confidence desc, id asc.
 
 OFFER_ACTS = ("propose", "counter")
 
@@ -557,12 +557,12 @@ def rank_proposals(parent: dict, proposals: list[dict]) -> dict:
         for c in parent.get("expect", []):
             w = c.get("weight", 0.0)
             if w <= 0:
-                continue  # cláusula inativa
+                continue  # inactive clause
             if "nl" in c:
                 cid = c.get("id", "?")
                 ok = cid in set(p.get("clauses", []))
-                detail = "nl aceita explicitamente (binding)" if ok \
-                    else "nl não aceita explicitamente -> não vinculante (penalidade)"
+                detail = "nl explicitly accepted (binding)" if ok \
+                    else "nl not explicitly accepted -> non-binding (penalty)"
             else:
                 cid = c.get("id", "?")
                 ok, detail = check_clause(c, p)
@@ -586,21 +586,21 @@ def rank_proposals(parent: dict, proposals: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- thread
 #
-# Máquina de estados dos acts: uma thread de negociação é aberta por um
-# request (com target) e percorre os acts segundo uma gramática mínima,
-# com terminal explícito (accept/commit/reject/cancel) e loops de
-# negociação (propose/counter) com teto configurável. Espelha o Go.
+# Act state machine: a negotiation thread is opened by a
+# request (with target) and walks the acts through a minimal grammar,
+# with an explicit terminal (accept/commit/reject/cancel) and negotiation
+# loops (propose/counter) with a configurable cap. Mirrors the Go.
 
 THREAD_STATES = ("new", "negotiating", "settled", "rejected")
 TERMINAL_STATES = ("settled", "rejected")
 
 class Thread:
-    """Uma negociação: request + os acts que o seguem (gramática mínima)."""
+    """A negotiation: request + the acts that follow it (minimal grammar)."""
     def __init__(self, cap: int = 8):
-        self.id = None            # id do request (raiz)
+        self.id = None            # id of the root request
         self.target = None
         self.state = "new"
-        self.last_offer = None    # id do último propose/counter
+        self.last_offer = None    # id of the last propose/counter
         self.offer_count = 0
         self.cap = cap if cap > 0 else 8
         self.trace: list[dict] = []
@@ -612,28 +612,28 @@ class Thread:
                            "state": self.state})
 
     def apply(self, m: dict) -> None:
-        """Transiciona a thread com uma mensagem. Levanta ValueError na
-        primeira violação de gramática (a mensagem NÃO é aplicada)."""
+        """Transitions the thread with a message. Raises ValueError on the
+        first grammar violation (the message is NOT applied)."""
         if m is None:
-            raise ValueError("thread: mensagem nil")
+            raise ValueError("thread: nil message")
         if self.state == "new":
             if m.get("act") != "request" or not m.get("target"):
-                raise ValueError(f"thread: open exige 'request' com target "
-                                 f"(obtido '{m.get('act')}' {m.get('id')})")
+                raise ValueError(f"thread: open requires 'request' with target "
+                                 f"(got '{m.get('act')}' {m.get('id')})")
             self.id, self.target = m["id"], m["target"]
             self.state = "negotiating"
             self._trace(m)
             return
         if self.state in TERMINAL_STATES:
-            raise ValueError(f"thread {self.id}: encerrada em {self.state} — "
-                             f"ato '{m.get('act')}' ({m.get('id')}) inválido")
+            raise ValueError(f"thread {self.id}: closed in {self.state} — "
+                             f"act '{m.get('act')}' ({m.get('id')}) invalid")
         # negotiating
         act = m.get("act")
         if act == "propose":
             self._offer(m)
         elif act == "counter":
             if self.last_offer is None:
-                raise ValueError(f"thread: 'counter' exige oferta anterior "
+                raise ValueError(f"thread: 'counter' requires a previous offer "
                                  f"(thread {self.id}, msg {m.get('id')})")
             self._offer(m)
         elif act in ("accept", "commit"):
@@ -643,21 +643,21 @@ class Thread:
             self.state = "rejected"
             self._trace(m)
         elif act in ("delegate", "inform", "ask", "verify"):
-            self._trace(m)  # lateral/delegação: sem mudança de estado
+            self._trace(m)  # lateral/delegation: no state change
         else:
-            raise ValueError(f"thread: ato '{act}' não reconhecido (msg {m.get('id')})")
+            raise ValueError(f"thread: unknown act '{act}' (msg {m.get('id')})")
 
     def _offer(self, m: dict):
         if self.offer_count + 1 > self.cap:
-            raise ValueError(f"thread: teto de ofertas excedido ({self.cap}) — "
-                             f"negociação sem final (thread {self.id}, msg {m.get('id')})")
+            raise ValueError(f"thread: offer cap exceeded ({self.cap}) — "
+                             f"negotiation without end (thread {self.id}, msg {m.get('id')})")
         self.offer_count += 1
         self.last_offer = m["id"]
         self._trace(m)
 
 def thread_from(cap: int, msgs: list[dict]) -> Thread:
-    """Constrói a thread a partir das mensagens ordenadas (raiz primeiro).
-    Levanta ValueError na primeira violação."""
+    """Builds the thread from the ordered messages (root first).
+    Raises ValueError on the first violation."""
     th = Thread(cap)
     for m in msgs:
         th.apply(m)
@@ -677,22 +677,22 @@ def assign_agreement_id(agr: dict) -> str:
 
 def build_agreement(request: dict, offer: dict, acceptance: dict) -> dict:
     if not request or not offer or not acceptance:
-        raise ValueError("agreement: request/offer/acceptance obrigatórios")
+        raise ValueError("agreement: request/offer/acceptance required")
     if not request.get("id") or not offer.get("id") or not acceptance.get("id"):
-        raise ValueError("agreement: mensagens sem id de conteúdo")
+        raise ValueError("agreement: messages without content id")
     if request.get("act") != "request":
-        raise ValueError(f"agreement: raiz deve ser request, obtido {request.get('act')}")
+        raise ValueError(f"agreement: root must be request, got {request.get('act')}")
     if offer.get("act") not in ("propose", "counter"):
-        raise ValueError(f"agreement: oferta deve ser propose/counter, obtido {offer.get('act')}")
+        raise ValueError(f"agreement: offer must be propose/counter, got {offer.get('act')}")
     if acceptance.get("act") not in ("accept", "commit"):
-        raise ValueError(f"agreement: aceite deve ser accept/commit, obtido {acceptance.get('act')}")
+        raise ValueError(f"agreement: acceptance must be accept/commit, got {acceptance.get('act')}")
     belongs = acceptance.get("parent") in (request["id"], offer["id"])
     if not belongs:
-        # provenance também expressa a filiação (accept sem parent explícito)
+        # provenance also expresses membership (accept without an explicit parent)
         prov = set(acceptance.get("provenance", []))
         belongs = request["id"] in prov and offer["id"] in prov
     if not belongs:
-        raise ValueError(f"agreement: aceite {acceptance['id']} não pertence à thread request/offer")
+        raise ValueError(f"agreement: acceptance {acceptance['id']} does not belong to the request/offer thread")
     binding = sorted(acceptance.get("clauses", []))
     tenant = acceptance.get("tenant") or request.get("tenant")
     out = {
@@ -716,7 +716,7 @@ def build_agreement(request: dict, offer: dict, acceptance: dict) -> dict:
 def sign_agreement(agr: dict, agent: str, keystore: KeyStore, tenant: str = "default") -> dict:
     key = keystore.get(agent, tenant)
     if key is None:
-        raise KeyError(f"chave ausente: {tenant}/{agent}")
+        raise KeyError(f"missing key: {tenant}/{agent}")
     out = dict(agr)
     canon = agreement_canonical_bytes(out)
     sig = {
@@ -734,36 +734,36 @@ def sign_agreement(agr: dict, agent: str, keystore: KeyStore, tenant: str = "def
 def verify_agreement(agr: dict) -> tuple[bool, str]:
     aid = agr.get("id", "")
     if not aid:
-        return False, "agreement sem id"
+        return False, "agreement without id"
     canon = agreement_canonical_bytes(agr)
     expected = "agreement:" + hashlib.sha256(canon).hexdigest()[:16]
     if expected != aid:
-        return False, "id de conteúdo divergente"
+        return False, "content id mismatch"
     sigs = agr.get("signatures", [])
     if not sigs:
-        return False, "agreement sem assinaturas"
+        return False, "agreement without signatures"
     seen = set()
     for s in sigs:
         agent = s.get("agent", "")
         if agent in seen:
-            return False, f"assinatura duplicada: {agent}"
+            return False, f"duplicate signature: {agent}"
         seen.add(agent)
         sig = s.get("signature")
         if not sig:
-            return False, f"assinatura ausente: {agent}"
+            return False, f"missing signature: {agent}"
         if not _HAVE_ED25519:
-            return False, "cryptography não disponível para ed25519"
+            return False, "cryptography not available for ed25519"
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         raw_pub = base64.b64decode(sig["key"])
         try:
             Ed25519PublicKey.from_public_bytes(raw_pub).verify(
                 base64.b64decode(sig["sig"]), canon)
         except Exception as e:
-            return False, f"assinatura inválida ({agent}): {e}"
-    return True, "agreement válido"
+            return False, f"invalid signature ({agent}): {e}"
+    return True, "agreement valid"
 
 def validate(msg: dict, parent: dict | None = None, now: datetime | None = None) -> dict:
-    """Retorna {schema_ok, signature_ok, sig_msg, tenant_ok, clauses: [...], warnings: [...]}."""
+    """Returns {schema_ok, signature_ok, sig_msg, tenant_ok, clauses: [...], warnings: [...]}. """
     from jsonschema import validate as jsval, ValidationError
     out = {"id": msg.get("id"), "act": msg.get("act"), "warnings": []}
 
@@ -782,14 +782,14 @@ def validate(msg: dict, parent: dict | None = None, now: datetime | None = None)
     out["signature_ok"], out["sig_msg"] = ok, why
     out["tenant_ok"] = bool(msg.get("tenant"))
     if not out["tenant_ok"]:
-        out["warnings"].append("sem tenant (exigível em deploy multi-tenant)")
+        out["warnings"].append("missing tenant (required in multi-tenant deployments)")
 
     now = now or datetime.now(timezone.utc)
     dl = msg.get("deadline")
     if dl and datetime.strptime(dl, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) < now:
-        out["warnings"].append(f"deadline expirado: {dl}")
+        out["warnings"].append(f"expired deadline: {dl}")
 
-    # contrato: cláusulas 'expect' do MENSAGEM-PAI avaliadas contra ESTA mensagem
+    # contract: 'expect' clauses of the PARENT message evaluated against THIS message
     if parent and "expect" in parent and msg["act"] in ("propose", "counter", "accept", "commit"):
         accepted = set(msg.get("clauses", []))
         out["clauses"] = []
@@ -798,8 +798,8 @@ def validate(msg: dict, parent: dict | None = None, now: datetime | None = None)
             if "nl" in c:
                 binding = cid in accepted
                 out["clauses"].append({"id": cid, "nl": c["nl"], "binding": binding,
-                                       "detail": "aceite explícito" if binding
-                                       else "NÃO aceita explicitamente -> não vinculante"})
+                                       "detail": "explicitly accepted" if binding
+                                       else "not explicitly accepted -> non-binding"})
             else:
                 okc, detail = check_clause(c, msg)
                 out["clauses"].append({"id": cid, "check": c["check"], "ok": okc, "detail": detail})
@@ -808,7 +808,7 @@ def validate(msg: dict, parent: dict | None = None, now: datetime | None = None)
 # ---------------------------------------------------------------- CLI
 def main():
     if len(sys.argv) < 2:
-        print("uso: parley.py <arquivo.parley> [--sign] [--thread]")
+        print("usage: parley.py <file.parley> [--sign] [--thread]")
         sys.exit(1)
     doc = parse_text(open(sys.argv[1]).read())
     msgs = finalize(doc)

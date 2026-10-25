@@ -1,18 +1,19 @@
-// PARLEY v0 — KeyStore: chaves ed25519 reais (produção).
+// PARLEY v0 — KeyStore: real ed25519 keys (production).
 //
-// O modelo de confiança exige assinaturas com chave privada REAL: derivar a
-// chave do agent_id (parley.DeriveKey) é modo TESTE — qualquer pessoa que
-// conheça o id deriva a mesma chave e finge ser o agente. O KeyStore é o
-// caminho de produção: gerar (ou carregar) pares ed25519, expor a pública
-// no Agent Card (card.Pub), assinar mensagens com a privada.
+// The trust model requires signatures with a REAL private key: deriving
+// the key from the agent_id (parley.DeriveKey) is TEST mode — anyone who
+// knows the id derives the same key and impersonates the agent. The
+// KeyStore is the production path: generate (or load) ed25519 pairs,
+// expose the public key in the Agent Card (card.Pub), sign messages with
+// the private key.
 //
-// Persistência: um arquivo JSON por agente, chmod 0600, gravado de forma
-// atômica (temp + rename). O arquivo contém a seed privada — quem tem o
-// arquivo TEM a identidade do agente. Em produção real, o arquivo vive em
-// disco criptografado / secret manager; o formato do arquivo é o mesmo.
+// Persistence: one JSON file per agent, chmod 0600, written atomically
+// (temp + rename). The file contains the private seed — whoever has the
+// file HAS the agent's identity. In real production the file lives on
+// encrypted disk / a secret manager; the file format is the same.
 //
-// Interop: o formato é espelhado no Python (parley_keystore.py) — mesma
-// estrutura JSON, mesma codificação base64 da seed.
+// Interop: the format is mirrored in Python (parley_keystore.py) — same
+// JSON structure, same base64 encoding of the seed.
 package parley
 
 import (
@@ -77,7 +78,7 @@ func (ks *KeyStore) Get(agent, tenant string) (ed25519.PrivateKey, bool) {
 func (ks *KeyStore) MustGet(agent, tenant string) ed25519.PrivateKey {
 	priv, ok := ks.Get(agent, tenant)
 	if !ok {
-		panic(fmt.Sprintf("parley: keystore: chave ausente para %s/%s", tenant, agent))
+		panic(fmt.Sprintf("parley: keystore: missing key for %s/%s", tenant, agent))
 	}
 	return priv
 }
@@ -98,7 +99,7 @@ func (ks *KeyStore) PubKey(agent, tenant string) (ed25519.PublicKey, bool) {
 func (ks *KeyStore) SignWith(m *Message, tenant string) (*Message, error) {
 	priv, ok := ks.Get(m.From.ID, tenant)
 	if !ok {
-		return nil, fmt.Errorf("parley: keystore: chave ausente para %s/%s", tenant, m.From.ID)
+		return nil, fmt.Errorf("parley: keystore: missing key for %s/%s", tenant, m.From.ID)
 	}
 	out := *m
 	canon, err := CanonicalBytes(&out)
@@ -150,10 +151,10 @@ func (ks *KeyStore) Load(path string) error {
 	for _, e := range list {
 		seed, err := base64.StdEncoding.DecodeString(e.SeedB64)
 		if err != nil {
-			return fmt.Errorf("parley: keystore: seed base64 inválida (%s): %w", e.Agent, err)
+			return fmt.Errorf("parley: keystore: invalid base64 seed (%s): %w", e.Agent, err)
 		}
 		if len(seed) != ed25519.SeedSize {
-			return fmt.Errorf("parley: keystore: seed com tamanho inválido (%s)", e.Agent)
+			return fmt.Errorf("parley: keystore: seed with invalid size (%s)", e.Agent)
 		}
 		ks.entries[ksKey(e.Tenant, e.Agent)] = ed25519.NewKeyFromSeed(seed)
 	}

@@ -89,7 +89,7 @@ func ParseText(src string) (*Doc, error) {
 		case "AGENT":
 			m := agentRe.FindStringSubmatch(s)
 			if m == nil {
-				return nil, fmt.Errorf("ln %d: AGENT malformado: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: malformed AGENT: %s", ln+1, s)
 			}
 			curAgent = m[2]
 			doc.Agents[curAgent] = Agent{ID: m[1], Alias: curAgent}
@@ -97,7 +97,7 @@ func ParseText(src string) (*Doc, error) {
 		case "PROVIDES":
 			m := provRe.FindStringSubmatch(s)
 			if m == nil || curAgent == "" {
-				return nil, fmt.Errorf("ln %d: PROVIDES malformado: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: malformed PROVIDES: %s", ln+1, s)
 			}
 			curProv = m[1]
 			ver, _ := strconv.Atoi(m[2])
@@ -119,7 +119,7 @@ func ParseText(src string) (*Doc, error) {
 				m = ioOutRe.FindStringSubmatch(s)
 			}
 			if m == nil || curProv == "" {
-				return nil, fmt.Errorf("ln %d: INPUT/OUTPUT malformado: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: malformed INPUT/OUTPUT: %s", ln+1, s)
 			}
 			cap := doc.Capabilities[curProv]
 			f := Field{Name: m[1], Type: strings.ToUpper(m[2])}
@@ -133,11 +133,11 @@ func ParseText(src string) (*Doc, error) {
 		case "COST":
 			m := costRe.FindStringSubmatch(s)
 			if m == nil || curProv == "" {
-				return nil, fmt.Errorf("ln %d: COST malformado: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: malformed COST: %s", ln+1, s)
 			}
 			v, err := parseValue(m[3])
 			if err != nil {
-				return nil, fmt.Errorf("ln %d: COST valor: %w", ln+1, err)
+				return nil, fmt.Errorf("ln %d: COST value: %w", ln+1, err)
 			}
 			cap := doc.Capabilities[curProv]
 			cap.Cost = append(cap.Cost, Check{Field: m[1], Op: ops[m[2]], Value: v})
@@ -145,7 +145,7 @@ func ParseText(src string) (*Doc, error) {
 			continue
 		case "DEFAULT_CONFIDENCE":
 			if curProv == "" {
-				return nil, fmt.Errorf("ln %d: DEFAULT_CONFIDENCE fora de PROVIDES", ln+1)
+				return nil, fmt.Errorf("ln %d: DEFAULT_CONFIDENCE outside PROVIDES", ln+1)
 			}
 			v, err := parseValue(strings.TrimSpace(s[len("DEFAULT_CONFIDENCE"):]))
 			if err != nil {
@@ -162,17 +162,17 @@ func ParseText(src string) (*Doc, error) {
 		// ---- messages ---------------------------------------------------------
 		if hm := headerRe.FindStringSubmatch(s); hm != nil {
 			if _, ok := doc.Agents[hm[1]]; !ok {
-				return nil, fmt.Errorf("ln %d: agente desconhecido: %s", ln+1, hm[1])
+				return nil, fmt.Errorf("ln %d: unknown agent: %s", ln+1, hm[1])
 			}
 			if _, ok := doc.Agents[hm[2]]; !ok {
-				return nil, fmt.Errorf("ln %d: agente desconhecido: %s", ln+1, hm[2])
+				return nil, fmt.Errorf("ln %d: unknown agent: %s", ln+1, hm[2])
 			}
 			curMsg = NewMessage(doc.Agents[hm[1]].ID, doc.Agents[hm[2]].ID, Now())
 			doc.Messages = append(doc.Messages, curMsg)
 			continue
 		}
 		if curMsg == nil {
-			return nil, fmt.Errorf("ln %d: linha fora de contexto (agente/mensagem): %s", ln+1, s)
+			return nil, fmt.Errorf("ln %d: line outside context (agent/message): %s", ln+1, s)
 		}
 		m := curMsg
 
@@ -199,7 +199,7 @@ func ParseText(src string) (*Doc, error) {
 			for _, pair := range splitTop(restOf(s)) {
 				k, v, ok := strings.Cut(pair, "=")
 				if !ok {
-					return nil, fmt.Errorf("ln %d: WITH par sem '=': %s", ln+1, pair)
+					return nil, fmt.Errorf("ln %d: WITH pair without '=': %s", ln+1, pair)
 				}
 				pv, err := parseValue(strings.TrimSpace(v))
 				if err != nil {
@@ -245,12 +245,12 @@ func ParseText(src string) (*Doc, error) {
 			rest, _, ok := strings.Cut(s, "->")
 			_ = rest
 			if !ok {
-				return nil, fmt.Errorf("ln %d: FALLBACK sem '->': %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: FALLBACK without '->': %s", ln+1, s)
 			}
 			tail := strings.TrimSpace(rest)
 			parts := strings.Fields(tail)
 			if len(parts) == 0 {
-				return nil, fmt.Errorf("ln %d: FALLBACK sem destino: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: FALLBACK without target: %s", ln+1, s)
 			}
 			fb := &Fallback{To: AgentRef{ID: strings.Trim(parts[0], `"`)}}
 			if len(parts) >= 2 && strings.HasPrefix(parts[1], `"`) {
@@ -291,7 +291,7 @@ func ParseText(src string) (*Doc, error) {
 				}
 				cl.Check = &Check{Field: cm[1], Op: ops[cm[2]], Value: v}
 			} else {
-				return nil, fmt.Errorf("ln %d: EXPECT malformado: %s", ln+1, s)
+				return nil, fmt.Errorf("ln %d: malformed EXPECT: %s", ln+1, s)
 			}
 			m.Expect = append(m.Expect, cl)
 		case upper == "CLAUSES":
@@ -299,7 +299,7 @@ func ParseText(src string) (*Doc, error) {
 				m.Clauses = append(m.Clauses, strings.Trim(p, `"`))
 			}
 		default:
-			return nil, fmt.Errorf("ln %d: token desconhecido: %q em %s", ln+1, first, s)
+			return nil, fmt.Errorf("ln %d: unknown token: %q in %s", ln+1, first, s)
 		}
 	}
 
@@ -338,7 +338,7 @@ func Finalize(doc *Doc) []*Message {
 func mustMsgN(ref string) int {
 	n, err := strconv.Atoi(ref[4:])
 	if err != nil || n < 1 {
-		panic("parley: referência @msg inválida: " + ref)
+		panic("parley: invalid @msg reference: " + ref)
 	}
 	return n
 }
@@ -400,7 +400,7 @@ func splitTop(s string) []string {
 func parseValue(s string) (any, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", fmt.Errorf("valor vazio")
+		return "", fmt.Errorf("empty value")
 	}
 	if s[0] == '"' {
 		var v any
@@ -429,7 +429,7 @@ func parseValue(s string) (any, error) {
 			}
 			return out, nil
 		}
-		return nil, fmt.Errorf("JSON inválido: %s", s)
+		return nil, fmt.Errorf("invalid JSON: %s", s)
 	}
 	switch strings.ToLower(s) {
 	case "true":

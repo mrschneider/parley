@@ -40,7 +40,7 @@ func rankRequest(t *testing.T) *parley.Message {
 	m.Expect = []parley.Clause{
 		{ID: "c1", Check: &parley.Check{Field: "confidence", Op: "gt", Value: 0.85}, Weight: 1.0},
 		{ID: "c2", Check: &parley.Check{Field: "route.eta_min", Op: "lte", Value: 150}, Weight: 0.9},
-		{ID: "c3", NL: "evitar obras nas próximas 24h", Weight: 0.9},
+		{ID: "c3", NL: "avoid roadworks in the next 24h", Weight: 0.9},
 	}
 	parley.AssignID(m)
 	return parley.Sign(m, "planner-42", "acme")
@@ -52,43 +52,43 @@ func TestInboxThreadAndRanking(t *testing.T) {
 	expect(t, in, rawOf(t, req), StatusAccepted)
 	st, ok := in.ThreadState(req.ID)
 	if !ok || st != parley.StateNegotiating {
-		t.Fatalf("thread do request: %q ok=%v", st, ok)
+		t.Fatalf("request thread: %q ok=%v", st, ok)
 	}
 
-	// oferta A: conf 0.93, eta 142, NÃO aceita a nl -> score 0
+	// offer A: conf 0.93, eta 142, does NOT accept the nl -> score 0
 	a := offerMsg(t, "dispatcher-7", "planner-42", "propose", req.ID,
 		map[string]any{"route": map[string]any{"eta_min": 142}}, 0.93, nil)
 	resA := expect(t, in, rawOf(t, a), StatusAccepted)
 	if resA.Validation == nil {
-		t.Fatal("Validation ausente na oferta (pai conhecido)")
+		t.Fatal("Validation missing from the offer (known parent)")
 	}
 	rkA, ok := resA.Validation["ranking"].(*parley.Ranking)
 	if !ok {
-		t.Fatalf("ranking ausente na oferta: %v", resA.Validation)
+		t.Fatalf("ranking missing from the offer: %v", resA.Validation)
 	}
 	if rkA.Top == nil || rkA.Top.Proposal.ID != a.ID {
-		t.Fatalf("com 1 oferta, ela deve ser o topo: %+v", rkA.Top)
+		t.Fatalf("with 1 offer, it must be the top: %+v", rkA.Top)
 	}
 	if rkA.Top.Score != 0 {
-		t.Fatalf("oferta sem aceite da nl deveria ter score 0, obtive %v", rkA.Top.Score)
+		t.Fatalf("offer without accepting the nl should have score 0, got %v", rkA.Top.Score)
 	}
 	if st2, _ := in.ThreadState(req.ID); st2 != parley.StateNegotiating {
-		t.Fatalf("após proposta: %q", st2)
+		t.Fatalf("after proposal: %q", st2)
 	}
 
-	// oferta B: conf 0.95, eta 100, aceita a nl (c3) -> score 1.0
+	// offer B: conf 0.95, eta 100, accepts the nl (c3) -> score 1.0
 	b := offerMsg(t, "dispatcher-8", "planner-42", "propose", req.ID,
 		map[string]any{"route": map[string]any{"eta_min": 100}}, 0.95, []string{"c3"})
 	resB := expect(t, in, rawOf(t, b), StatusAccepted)
 	rkB := resB.Validation["ranking"].(*parley.Ranking)
 	if rkB.Top == nil || rkB.Top.Proposal.ID != b.ID {
-		t.Fatalf("B (score 1.0) deveria ser o topo, obtive %+v", rkB.Top)
+		t.Fatalf("B (score 1.0) should be the top, got %+v", rkB.Top)
 	}
 	if len(rkB.Entries) != 2 {
-		t.Fatalf("ranking deveria ter 2 ofertas, obtive %d", len(rkB.Entries))
+		t.Fatalf("ranking should have 2 offers, got %d", len(rkB.Entries))
 	}
 
-	// API direta: RankProposals(root) devolve a mesma ordenação
+	// Direct API: RankProposals(root) returns the same ordering
 	rk := in.RankProposals(req.ID)
 	if rk == nil || rk.Top == nil || rk.Top.Proposal.ID != b.ID {
 		t.Fatalf("Inbox.RankProposals: topo errado: %+v", rk)
@@ -99,21 +99,21 @@ func TestInboxThreadAndRanking(t *testing.T) {
 		map[string]any{"route": map[string]any{"eta_min": 100}}, 0, []string{"c3"})
 	expect(t, in, rawOf(t, acc), StatusAccepted)
 	if st3, _ := in.ThreadState(req.ID); st3 != parley.StateSettled {
-		t.Fatalf("após accept: %q", st3)
+		t.Fatalf("after accept: %q", st3)
 	}
 
-	// ato após terminal: reportado (warning), não rejeitado
+	// act after terminal: reported (warning), not rejected
 	late := offerMsg(t, "dispatcher-7", "planner-42", "propose", req.ID,
 		map[string]any{"route": map[string]any{"eta_min": 99}}, 0.99, nil)
 	resLate := expect(t, in, rawOf(t, late), StatusAccepted)
 	found := false
 	for _, w := range resLate.Warnings {
-		if strings.Contains(w, "encerrada") {
+		if strings.Contains(w, "closed") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("ato após terminal deveria reportar warning de thread: %v", resLate.Warnings)
+		t.Fatalf("act after terminal should report a thread warning: %v", resLate.Warnings)
 	}
 }
 
@@ -121,7 +121,7 @@ func TestInboxThreadCounterWithoutOffer(t *testing.T) {
 	in := NewInbox()
 	req := rankRequest(t)
 	expect(t, in, rawOf(t, req), StatusAccepted)
-	// counter direto, sem proposta anterior -> warning de gramática
+	// direct counter, no previous offer -> grammar warning
 	cn := offerMsg(t, "dispatcher-7", "planner-42", "counter", req.ID,
 		map[string]any{"route": map[string]any{"eta_min": 140}}, 0.9, nil)
 	res := expect(t, in, rawOf(t, cn), StatusAccepted)
@@ -132,6 +132,6 @@ func TestInboxThreadCounterWithoutOffer(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("counter sem oferta deveria reportar warning: %v", res.Warnings)
+		t.Fatalf("counter without offer should report a warning: %v", res.Warnings)
 	}
 }

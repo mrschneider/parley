@@ -46,23 +46,23 @@ type Agreement struct {
 // acceptance listed; the offer body is the agreed body.
 func BuildAgreement(request, offer, acceptance *Message) (*Agreement, error) {
 	if request == nil || offer == nil || acceptance == nil {
-		return nil, fmt.Errorf("parley: agreement: request/offer/acceptance obrigatórios")
+		return nil, fmt.Errorf("parley: agreement: request/offer/acceptance required")
 	}
 	if request.ID == "" || offer.ID == "" || acceptance.ID == "" {
-		return nil, fmt.Errorf("parley: agreement: mensagens sem id de conteúdo")
+		return nil, fmt.Errorf("parley: agreement: messages without content id")
 	}
 	if request.Act != "request" {
-		return nil, fmt.Errorf("parley: agreement: raiz deve ser request, obtido %s", request.Act)
+		return nil, fmt.Errorf("parley: agreement: root must be request, got %s", request.Act)
 	}
 	if offer.Act != "propose" && offer.Act != "counter" {
-		return nil, fmt.Errorf("parley: agreement: oferta deve ser propose/counter, obtido %s", offer.Act)
+		return nil, fmt.Errorf("parley: agreement: offer must be propose/counter, got %s", offer.Act)
 	}
 	if acceptance.Act != "accept" && acceptance.Act != "commit" {
-		return nil, fmt.Errorf("parley: agreement: aceite deve ser accept/commit, obtido %s", acceptance.Act)
+		return nil, fmt.Errorf("parley: agreement: acceptance must be accept/commit, got %s", acceptance.Act)
 	}
 	belongs := acceptance.Parent == request.ID || acceptance.Parent == offer.ID
 	if !belongs {
-		// provenance também expressa a filiação (accept sem parent explícito)
+		// provenance also expresses membership (accept without an explicit parent)
 		prov := map[string]bool{}
 		for _, id := range acceptance.Provenance {
 			prov[id] = true
@@ -70,7 +70,7 @@ func BuildAgreement(request, offer, acceptance *Message) (*Agreement, error) {
 		belongs = prov[request.ID] && prov[offer.ID]
 	}
 	if !belongs {
-		return nil, fmt.Errorf("parley: agreement: aceite %s não pertence à thread request/offer", acceptance.ID)
+		return nil, fmt.Errorf("parley: agreement: acceptance %s does not belong to the request/offer thread", acceptance.ID)
 	}
 	binding := append([]string(nil), acceptance.Clauses...)
 	sort.Strings(binding)
@@ -190,25 +190,25 @@ func SignAgreement(a *Agreement, agent, tenant string, priv ed25519.PrivateKey) 
 // VerifyAgreement verifies every signature over the canonical receipt.
 func VerifyAgreement(a *Agreement) (bool, string) {
 	if a.ID == "" {
-		return false, "agreement sem id"
+		return false, "agreement without id"
 	}
 	expected, err := AssignAgreementIDTemp(a)
 	if err != nil {
 		return false, err.Error()
 	}
 	if expected.id != a.ID {
-		return false, "id de conteúdo divergente"
+		return false, "content id mismatch"
 	}
 	if len(a.Signatures) == 0 {
-		return false, "agreement sem assinaturas"
+		return false, "agreement without signatures"
 	}
 	seen := map[string]bool{}
 	for _, s := range a.Signatures {
 		if s.Signature == nil {
-			return false, "assinatura ausente: " + s.Agent
+			return false, "missing signature: " + s.Agent
 		}
 		if seen[s.Agent] {
-			return false, "assinatura duplicada: " + s.Agent
+			return false, "duplicate signature: " + s.Agent
 		}
 		seen[s.Agent] = true
 		rawPub, decodeErr := base64.StdEncoding.DecodeString(s.Signature.Key)
@@ -229,13 +229,13 @@ func VerifyAgreement(a *Agreement) (bool, string) {
 		}
 		sigBytes, err := base64.StdEncoding.DecodeString(s.Signature.Sig)
 		if err != nil {
-			return false, "assinatura base64 inválida: " + s.Agent
+			return false, "invalid base64 signature: " + s.Agent
 		}
 		if !ed25519.Verify(pub, expected.canon, sigBytes) {
-			return false, "assinatura inválida: " + s.Agent
+			return false, "invalid signature: " + s.Agent
 		}
 	}
-	return true, "agreement válido"
+	return true, "agreement valid"
 }
 
 type agreementDigest struct {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Repository translated to English**: docs, templates, code comments,
+  diagnostics, demo output, tests and fixtures. The example was renamed
+  `examples/negociacao.parley` -> `examples/negotiation.parley` (all
+  references updated, CI smoke step included). Interop fixtures
+  (`interop-py`, `interop-id`, `interop-ranking`) regenerated from
+  English content with matching canonical bytes, content ids and
+  signatures; Python/Go diagnostics use the same English glossary.
+
 ## [v0.2.0] - 2026-10-25
 
 ### Added

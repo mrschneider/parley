@@ -1,11 +1,11 @@
-// PARLEY v0 — Agent Card (registro/descoberta de capacidades).
+// PARLEY v0 — Agent Card (capability registry/discovery).
 //
-// O Agent Card é o "who am I" de um agente: identidade, tenant, endpoint,
-// capacidades oferecidas e a chave pública ed25519 usada para verificar as
-// assinaturas das mensagens. O card é ASSINADO (self-contained trust): quem
-// publica no registro não precisa ser confiável — o verificador confia na
-// chave que ele mesmo declarou e usa essa chave para verificar o card e,
-// em seguida, todas as mensagens do agente.
+// The Agent Card is an agent's "who am I": identity, tenant, endpoint,
+// offered capabilities, and the ed25519 public key used to verify the
+// agent's message signatures. The card is SIGNED (self-contained trust):
+// whoever publishes to the registry need not be trusted — the verifier
+// trusts the key the card itself declares, uses that key to verify the
+// card, and then verifies every message from the agent.
 package parley
 
 import (
@@ -123,21 +123,21 @@ func SignCard(c *Card, priv ed25519.PrivateKey) *Card {
 func VerifyCard(c *Card) (bool, string) {
 	sig := c.Signature
 	if sig == nil {
-		return false, "sem assinatura"
+		return false, "missing signature"
 	}
 	if sig.Alg != "ed25519" {
-		return false, "algoritmo não suportado: " + sig.Alg
+		return false, "unsupported algorithm: " + sig.Alg
 	}
 	pub, err := base64.StdEncoding.DecodeString(c.Pub.Key)
 	if err != nil {
-		return false, "chave pública base64 inválida"
+		return false, "invalid base64 public key"
 	}
 	if len(pub) != ed25519.PublicKeySize {
-		return false, fmt.Sprintf("tamanho da chave pública inválido: %d", len(pub))
+		return false, fmt.Sprintf("invalid public key size: %d", len(pub))
 	}
 	sigBytes, err := base64.StdEncoding.DecodeString(sig.Sig)
 	if err != nil {
-		return false, "assinatura base64 inválida"
+		return false, "invalid base64 signature"
 	}
 	tmp := *c
 	tmp.Signature = nil
@@ -147,9 +147,9 @@ func VerifyCard(c *Card) (bool, string) {
 		return false, "canonical: " + err.Error()
 	}
 	if ed25519.Verify(ed25519.PublicKey(pub), canon, sigBytes) {
-		return true, "assinatura válida (ed25519)"
+		return true, "valid signature (ed25519)"
 	}
-	return false, "assinatura inválida (ed25519)"
+	return false, "invalid signature (ed25519)"
 }
 
 // CardID recomputes the content-addressed card id from c (ignoring any

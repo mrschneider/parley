@@ -7,10 +7,10 @@
     "to": {
       "id": "dispatcher-7"
     },
-    "ts": "2026-10-23T04:21:01Z",
+    "ts": "2026-10-25T20:56:45Z",
     "act": "request",
     "target": "route.plan",
-    "intent": "Preciso da rota mais rápida, o usuário está apressado",
+    "intent": "I need the fastest route, the user is in a hurry",
     "body": {
       "origin": "Lisboa",
       "dest": "Porto"
@@ -37,7 +37,7 @@
         "id": "c2"
       },
       {
-        "nl": "Rota deve evitar estradas com obras anunciadas nas próximas 24h",
+        "nl": "Route must avoid roads with announced roadworks in the next 24h",
         "weight": 0.9,
         "id": "c3"
       }
@@ -47,11 +47,11 @@
         "id": "dispatcher-backup"
       }
     },
-    "id": "msg:b4e9f9660d1e51b7",
+    "id": "msg:6ea1857e9ed5d770",
     "signature": {
       "alg": "ed25519",
       "key": "parley-test:planner-42",
-      "sig": "yVQvm2iEDpDDZPiwh1NHBFs6qLRa4NAvkDvSJt2si/1MPa9u4HX6P/BIIa+DbAuYKADAHE7QHIX41B4Rf6MXAQ=="
+      "sig": "iFmQeJE+So1X6ydaDBBxKxnXdCA5uB4GDR8sK4+jU273RrSFlACiLZ+tkjaH1VvmnmWT7CYRyfFvfGHpFSx9Aw=="
     }
   },
   {
@@ -62,10 +62,10 @@
     "to": {
       "id": "planner-42"
     },
-    "ts": "2026-10-23T04:21:01Z",
+    "ts": "2026-10-25T20:56:45Z",
     "act": "propose",
     "target": "route.plan",
-    "parent": "msg:b4e9f9660d1e51b7",
+    "parent": "msg:6ea1857e9ed5d770",
     "body": {
       "route": {
         "eta_min": 142,
@@ -79,13 +79,13 @@
       "cost_eur": 1.4
     },
     "confidence": 0.93,
-    "note": "Viseu tem obra; rota alternativa por Aveiro é +40 min",
+    "note": "Viseu has roadworks; the alternate route via Aveiro is +40 min",
     "tenant": "acme",
-    "id": "msg:8a282ace84eb622c",
+    "id": "msg:43487a2529071275",
     "signature": {
       "alg": "ed25519",
       "key": "parley-test:dispatcher-7",
-      "sig": "7BV0VveBsS2pUREJXliwjvSJ7Zk6xMqBpSv+iwupnBRNZPKWeVoInsU8x/07FgJGHAO8ASS4vSR3RiDM6QE6Ag=="
+      "sig": "eA5A6QQTh816g0wsRUzoWHGFLMFyPefsTkoSSNZZAaDgQ5Ex+9AF7Lkl8ZcQcytmmfG6PVOogXdqYCrOAp0lDQ=="
     }
   },
   {
@@ -96,22 +96,22 @@
     "to": {
       "id": "dispatcher-7"
     },
-    "ts": "2026-10-23T04:21:01Z",
+    "ts": "2026-10-25T20:56:45Z",
     "act": "accept",
     "target": "route.plan",
     "clauses": [
       "c3"
     ],
     "provenance": [
-      "msg:b4e9f9660d1e51b7",
-      "msg:8a282ace84eb622c"
+      "msg:6ea1857e9ed5d770",
+      "msg:43487a2529071275"
     ],
     "tenant": "acme",
-    "id": "msg:bb8bc7dd919e7b09",
+    "id": "msg:a38ef40248ce87a4",
     "signature": {
       "alg": "ed25519",
       "key": "parley-test:planner-42",
-      "sig": "eUWzT412Pikg+PGVDx0BExenam83rSEKN6046tyVn3TXDCe4Zun5HF+FGgLVtjrjNgmdKMAL7poH9IrsZjcKDQ=="
+      "sig": "qE6I8NiTYU53vkWQWTlXOjB9og54LyovQqFQUCW7gOn/3T3XsR8ipFGtifTTxoM+w4FjmNkZuIDBlV2JlvM4Bw=="
     }
   }
 ]

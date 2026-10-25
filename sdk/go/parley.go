@@ -160,7 +160,7 @@ func encodeCanonical(buf *bytes.Buffer, v any) error {
 		} else if n, err := x.Int64(); err == nil {
 			buf.WriteString(strconv.FormatInt(n, 10))
 		} else {
-			return fmt.Errorf("número canônico inválido: %s", x)
+			return fmt.Errorf("invalid canonical number: %s", x)
 		}
 	case string:
 		encodeJSONString(buf, x)
@@ -194,7 +194,7 @@ func encodeCanonical(buf *bytes.Buffer, v any) error {
 		}
 		buf.WriteByte(']')
 	default:
-		return fmt.Errorf("tipo não serializável canonicamente: %T", v)
+		return fmt.Errorf("type not canonically serializable: %T", v)
 	}
 	return nil
 }
@@ -418,7 +418,7 @@ func Sign(m *Message, agentID, tenant string) *Message {
 func Verify(m *Message) (bool, string) {
 	sig := m.Signature
 	if sig == nil {
-		return false, "sem assinatura"
+		return false, "missing signature"
 	}
 	keyID := sig.Key
 	agentID := keyID
@@ -435,15 +435,15 @@ func Verify(m *Message) (bool, string) {
 	}
 	sigBytes, err := base64.StdEncoding.DecodeString(sig.Sig)
 	if err != nil {
-		return false, "assinatura base64 inválida"
+		return false, "invalid base64 signature"
 	}
 	if sig.Alg == "ed25519" {
 		if rawPub, decodeErr := base64.StdEncoding.DecodeString(keyID); decodeErr == nil &&
 			len(rawPub) == ed25519.PublicKeySize {
 			if ed25519.Verify(ed25519.PublicKey(rawPub), canonical, sigBytes) {
-				return true, "assinatura válida (ed25519, chave do card)"
+				return true, "valid signature (ed25519, card key)"
 			}
-			return false, "assinatura inválida (ed25519, chave do card)"
+			return false, "invalid signature (ed25519, card key)"
 		}
 	}
 	sum := sha256.Sum256([]byte(tenant + ":" + agentID))
@@ -451,18 +451,18 @@ func Verify(m *Message) (bool, string) {
 	case "ed25519":
 		pub := ed25519.NewKeyFromSeed(sum[:]).Public().(ed25519.PublicKey)
 		if ed25519.Verify(pub, canonical, sigBytes) {
-			return true, "assinatura válida (ed25519)"
+			return true, "valid signature (ed25519)"
 		}
-		return false, "assinatura inválida (ed25519)"
+		return false, "invalid signature (ed25519)"
 	case "hmac-sha256":
 		mac := hmac.New(sha256.New, sum[:])
 		mac.Write(canonical)
 		if hmac.Equal(mac.Sum(nil), sigBytes) {
-			return true, "assinatura válida (hmac-sha256)"
+			return true, "valid signature (hmac-sha256)"
 		}
-		return false, "assinatura inválida (hmac)"
+		return false, "invalid signature (hmac)"
 	default:
-		return false, "algoritmo não suportado: " + sig.Alg
+		return false, "unsupported algorithm: " + sig.Alg
 	}
 }
 
@@ -527,12 +527,12 @@ func BodyContract(m *Message, c *Capability) map[string]any {
 	out := map[string]any{"ok": true, "violations": []string{}, "warnings": []string{}}
 	if c == nil || m.Body == nil {
 		out["ok"] = true
-		out["detail"] = "sem contrato (sem capability declarada ou sem body)"
+		out["detail"] = "no contract (no capability declared or no body)"
 		return out
 	}
 	kind := ContractKind(m.Act)
 	if kind == "" {
-		out["detail"] = "act sem contrato de corpo: " + m.Act
+		out["detail"] = "act without body contract: " + m.Act
 		return out
 	}
 	fields := c.Inputs
@@ -547,25 +547,25 @@ func BodyContract(m *Message, c *Capability) map[string]any {
 		case !present:
 			if kind == "input" {
 				out["violations"] = append(out["violations"].([]string),
-					"campo obrigatório ausente: "+f.Name)
+					"missing required field: "+f.Name)
 			} else {
 				out["warnings"] = append(out["warnings"].([]string),
-					"output declarado ausente: "+f.Name)
+					"declared output missing: "+f.Name)
 			}
 		case v == nil:
 			out["violations"] = append(out["violations"].([]string),
-				"campo nulo: "+f.Name)
+				"null field: "+f.Name)
 		default:
 			if reason, bad := checkType(v, f.Type); bad {
 				out["violations"] = append(out["violations"].([]string),
-					f.Name+": tipo "+f.Type+" esperado, obtido "+reason)
+					f.Name+": expected type "+f.Type+", got "+reason)
 			}
 		}
 	}
 	for k := range m.Body {
 		if !declared[k] {
 			out["warnings"] = append(out["warnings"].([]string),
-				"campo não declarado no contrato: "+k)
+				"field not declared in contract: "+k)
 		}
 	}
 	out["capability"] = c.Name

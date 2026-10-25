@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-PARLEY v0 — Language Server (LSP) para arquivos .parley.
+PARLEY v0 — Language Server (LSP) for .parley files.
 
-Zero dependências de terceiros: JSON-RPC 2.0 sobre stdio com framing
-Content-Length, usando apenas o parser de referência (parley.py) como
-fonte da verdade de sintaxe + uma camada de análise tolerante (shadow
-model) para múltiplos diagnostics, completions, hover e símbolos.
+Zero third-party dependencies: JSON-RPC 2.0 over stdio with Content-Length
+framing, using only the reference parser (parley.py) as the source of truth
+for syntax + a tolerant analysis layer (shadow model) for multiple
+diagnostics, completions, hover and symbols.
 
-Capacidades:
-  - textDocumentSync (full)  -> publishDiagnostics a cada open/change
-  - completionProvider       -> keywords contextuais + ids de agentes,
-                                nomes de capabilities e campos de input
-  - hoverProvider            -> docs de keywords, agentes, capabilities,
-                                referências @msgN
-  - documentSymbolProvider   -> agentes / capabilities / mensagens (árvore)
+Capabilities:
+  - textDocumentSync (full)  -> publishDiagnostics on every open/change
+  - completionProvider       -> contextual keywords + agent ids,
+                                capability names and input fields
+  - hoverProvider            -> docs for keywords, agents, capabilities,
+                                @msgN references
+  - documentSymbolProvider   -> agents / capabilities / messages (tree)
 
-Uso:
+Usage:
   python3 parley_lsp.py            # server (stdio)
-  python3 parley_lsp.py --check F  # one-shot: diagnostics de F no stdout
+  python3 parley_lsp.py --check F  # one-shot: diagnostics of F on stdout
 """
 from __future__ import annotations
 import json
@@ -31,10 +31,10 @@ SERVER_INFO = {"name": "parley-lsp", "version": "0.1.0"}
 
 # ---------------------------------------------------------------- shadow model
 #
-# O parser canônico é parley.parse_text (falha no 1º erro). Para um editor
-# queremos TODOS os problemas de uma vez: por isso uma varredura tolerante
-# linha a linha que replica a gramática (mesmos regex importados de parley)
-# e acumula diagnostics + posições de declaração para symbols/hover.
+# The canonical parser is parley.parse_text (fails on the 1st error). For an
+# editor we want ALL the problems at once: hence a tolerant line-by-line scan
+# that replicates the grammar (same regexes imported from parley)
+# and accumulates diagnostics + declaration positions for symbols/hover.
 
 TOP_KW = {"AGENT", "PROVIDES", "INPUT", "OUTPUT", "COST", "DEFAULT_CONFIDENCE"}
 MSG_KW = ({a.upper() for a in ACTS} |
@@ -45,43 +45,43 @@ TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$")
 MSGREF_RE = re.compile(r"^@msg(\d+)$")
 
 KW_DOCS = {
-    "AGENT": "Declara um agente e seu alias local.\n`agent \"id-estavel\" as ALIAS`",
-    "PROVIDES": "Abre a declaração de uma capability (contrato de input/output/custo).\n`provides \"route.plan\" v1`",
-    "INPUT": "Campo de input da capability em declaração: `input nome : Tipo`",
-    "OUTPUT": "Campo de output da capability em declaração: `output nome : Tipo`",
-    "COST": "Restrição de custo da capability: `cost campo op valor` (ex.: `cost latency_ms <= 200`)",
-    "DEFAULT_CONFIDENCE": "Confiança padrão da capability (0..1).",
-    "INTENT": "Intenção em linguagem natural para o LLM do recebedor: `intent \"...\"`",
-    "WITH": "Preenche o body estruturado: `with k = v, k2 = [a, b]` (valores JSON ou literais).",
-    "BY": "Deadline RFC3339: `by 2026-10-22T15:00:00Z`",
-    "NOTE": "Nota curta em texto livre (ex.: aviso numa proposta).",
-    "CONFIDENCE": "Confiança auto-declarada do remetente no body (0..1).",
-    "TENANT": "Chave de isolamento multi-tenant (exigível em deploy multi-tenant).",
-    "PARENT": "Id da mensagem respondida: id canônico (`msg:hex`) ou referência legível `@msgN`.",
-    "PROVENANCE": "Cadeia de ids que fundamentam a mensagem (auditoria): `provenance \"@msg1\", \"@msg2\"`.",
-    "FALLBACK": "Roteamento de contingência se o primário recusar ou estourar o deadline: `fallback -> \"agent-id\"`.",
-    "EXPECT": "Cláusula de contrato. `check`: `expect campo op valor` (validada por máquina). "
-              "`nl`: `expect nl \"texto\"` — só fica VINCULANTE se o contraparte aceitar a cláusula "
-              "explicitamente em ACCEPT. Peso opcional: `... w 0.9`.",
-    "CLAUSES": "Ids de cláusulas do pai aceitos explicitamente: `clauses \"c1\", \"c3\"` "
-               "(é isso que torna cláusulas 'nl' vinculantes).",
+    "AGENT": "Declares an agent and its local alias.\n`agent \"stable-id\" as ALIAS`",
+    "PROVIDES": "Opens a capability declaration (input/output/cost contract).\n`provides \"route.plan\" v1`",
+    "INPUT": "Input field of the capability being declared: `input name : Type`",
+    "OUTPUT": "Output field of the capability being declared: `output name : Type`",
+    "COST": "Cost constraint of the capability: `cost field op value` (e.g. `cost latency_ms <= 200`)",
+    "DEFAULT_CONFIDENCE": "Default confidence of the capability (0..1).",
+    "INTENT": "Natural-language intent for the receiver's LLM: `intent \"...\"`",
+    "WITH": "Fills the structured body: `with k = v, k2 = [a, b]` (JSON values or literals).",
+    "BY": "RFC3339 deadline: `by 2026-10-22T15:00:00Z`",
+    "NOTE": "Short free-text note (e.g. a warning in a proposal).",
+    "CONFIDENCE": "Sender's self-declared confidence in the body (0..1).",
+    "TENANT": "Multi-tenant isolation key (enforceable in multi-tenant deployments).",
+    "PARENT": "Id of the replied-to message: canonical id (`msg:hex`) or readable reference `@msgN`.",
+    "PROVENANCE": "Chain of ids backing the message (audit): `provenance \"@msg1\", \"@msg2\"`.",
+    "FALLBACK": "Contingency routing if the primary refuses or misses the deadline: `fallback -> \"agent-id\"`.",
+    "EXPECT": "Contract clause. `check`: `expect field op value` (machine-validated). "
+              "`nl`: `expect nl \"text\"` — only becomes BINDING if the counterparty accepts the clause "
+              "explicitly in ACCEPT. Optional weight: `... w 0.9`.",
+    "CLAUSES": "Parent's clause ids accepted explicitly: `clauses \"c1\", \"c3\"` "
+               "(this is what makes 'nl' clauses binding).",
 }
 for _a in sorted(ACTS):
     KW_DOCS[_a.upper()] = {
-        "inform": "Comunica um fato; não exige resposta.",
-        "ask": "Pergunta; resposta livre.",
-        "request": "Abre uma negociação: exige `target` (capability qualificada).",
-        "propose": "Oferta contra o `parent` (resposta a um request).",
-        "counter": "Contra-oferta; exige oferta anterior na thread.",
-        "accept": "Fecha a thread (settled). `clauses` torna 'nl' vinculante.",
-        "reject": "Rejeita; encerra a thread (rejected).",
-        "commit": "Confirma execução; encerra a thread (settled).",
-        "delegate": "Delega a outro agente; lateral (não muda estado da thread).",
-        "verify": "Solicita verificação; lateral.",
-        "cancel": "Cancela; encerra a thread (rejected).",
+        "inform": "Communicates a fact; no response required.",
+        "ask": "Question; free answer.",
+        "request": "Opens a negotiation: requires `target` (qualified capability).",
+        "propose": "Offer against the `parent` (response to a request).",
+        "counter": "Counter-offer; requires a previous offer in the thread.",
+        "accept": "Closes the thread (settled). `clauses` makes 'nl' binding.",
+        "reject": "Rejects; ends the thread (rejected).",
+        "commit": "Confirms execution; ends the thread (settled).",
+        "delegate": "Delegates to another agent; lateral (no thread state change).",
+        "verify": "Requests verification; lateral.",
+        "cancel": "Cancels; ends the thread (rejected).",
     }[_a]
 for _op, _name in OPS.items():
-    KW_DOCS[_op] = f"Operador de cláusula `check`: `{_op}` ({_name})."
+    KW_DOCS[_op] = f"Clause `check` operator: `{_op}` ({_name})."
 
 
 @dataclass
@@ -118,39 +118,39 @@ class Model:
                                msg, sev, code))
 
     def semantic(self, doc, messages):
-        """Check semânticos de alto valor sobre o doc parseado com sucesso."""
+        """High-value semantic checks over the successfully parsed doc."""
         n = len(doc.messages)
         for i, m in enumerate(doc.messages, 1):
             line = messages[i - 1]["line"] if i - 1 < len(messages) else 0
-            # @msgN fora do alcance -> finalize() estouraria IndexError
+            # @msgN out of range -> finalize() would raise IndexError
             for ref in [m.get("parent", "")] + list(m.get("provenance", [])):
                 mm = MSGREF_RE.match(ref)
                 if mm and not (1 <= int(mm.group(1)) <= n):
                     self.err(line, ref,
-                             f"referência {ref!r} fora do alcance (existem {n} mensagens)",
+                             f"reference {ref!r} out of range ({n} messages exist)",
                              "semref", 1)
             fb = m.get("fallback", {})
             fb_id = fb.get("to", {}).get("id", "")
             if fb_id and fb_id not in {a["id"] for a in self.agents.values()}:
                 self.err(line, fb_id,
-                         f"fallback para agente não declarado: {fb_id!r}",
+                         f"fallback to undeclared agent: {fb_id!r}",
                          "unknown-fallback", 2)
             for c in m.get("expect", []):
                 w = c.get("weight", 1.0)
                 if not (0 < w <= 1):
                     self.err(line, str(w),
-                             f"peso de cláusula fora de (0,1]: {w}", "clause-weight", 2)
+                             f"clause weight outside (0,1]: {w}", "clause-weight", 2)
             if m.get("act") == "request" and not m.get("target"):
                 self.err(line, "request",
-                         "request sem target (a thread exige capability qualificada)",
+                         "request without target (the thread requires a qualified capability)",
                          "no-target", 2)
             for c in m.get("expect", []):
                 chk = c.get("check", {})
                 fld = chk.get("field", "")
                 if chk and fld and "." not in fld and fld != "confidence":
-                    # caminho de corpo: heurística fraca, apenas informativo
+                    # body path: weak heuristic, informational only
                     pass
-            # clauses aceitas devem existir no parent
+            # accepted clauses must exist in the parent
             cl = m.get("clauses")
             if cl and m.get("parent"):
                 pm = MSGREF_RE.match(m["parent"])
@@ -160,7 +160,7 @@ class Model:
                     for cid in cl:
                         if cid not in valid:
                             self.err(line, cid,
-                                     f"cláusula {cid!r} não existe no expect da mensagem pai",
+                                     f"clause {cid!r} does not exist in the parent message's expect",
                                      "unknown-clause", 2)
 
 
@@ -169,7 +169,7 @@ def _line_of(src_lines, i):
 
 
 def analyze(src: str) -> Model:
-    """Varredura tolerante + parser canônico. Nunca levanta exceção."""
+    """Tolerant scan + canonical parser. Never raises an exception."""
     model = Model()
     lines = src.splitlines()
     cur_agent, cur_cap, cur_msg = None, None, None
@@ -184,7 +184,7 @@ def analyze(src: str) -> Model:
         if first == "AGENT":
             m = re.match(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', stripped, re.I)
             if not m:
-                model.err(i, stripped, "AGENT malformado (esperado: agent \"id\" as ALIAS)",
+                model.err(i, stripped, "malformed AGENT (expected: agent \"id\" as ALIAS)",
                           "bad-agent")
                 cur_agent = None
             else:
@@ -195,10 +195,10 @@ def analyze(src: str) -> Model:
         if first == "PROVIDES":
             m = re.match(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', stripped, re.I)
             if not m:
-                model.err(i, stripped, "PROVIDES malformado (esperado: provides \"nome\" vN)")
+                model.err(i, stripped, "malformed PROVIDES (expected: provides \"name\" vN)")
                 cur_cap = None
             elif cur_agent is None:
-                model.err(i, stripped, "PROVIDES antes de AGENT", "order")
+                model.err(i, stripped, "PROVIDES before AGENT", "order")
                 cur_cap = None
             else:
                 cur_cap, cur_msg = m.group(1), None
@@ -208,13 +208,13 @@ def analyze(src: str) -> Model:
                     model.agents[cur_agent]["provides"].append(cur_cap)
                 if not CAP_NAME_RE.match(cur_cap):
                     model.err(i, cur_cap,
-                              f"nome de capability {cur_cap!r} não segue o padrão "
-                              f"qualificado `x.y` do protocolo", "cap-name", 2)
+                              f"capability name {cur_cap!r} does not follow the protocol's "
+                              f"qualified `x.y` pattern", "cap-name", 2)
             continue
 
         if first in ("INPUT", "OUTPUT", "COST", "DEFAULT_CONFIDENCE"):
             if cur_cap is None:
-                model.err(i, stripped, f"{first} fora de uma declaração de capability",
+                model.err(i, stripped, f"{first} outside a capability declaration",
                           "order")
             continue
 
@@ -228,18 +228,18 @@ def analyze(src: str) -> Model:
         if hm and (hm.group(1) not in model.agents or hm.group(2) not in model.agents):
             missing = [g for g in (hm.group(1), hm.group(2)) if g not in model.agents]
             model.err(i, stripped,
-                      f"header referencia agente(s) não declarado(s): {', '.join(missing)}",
+                      f"header references undeclared agent(s): {', '.join(missing)}",
                       "unknown-agent")
             continue
 
         if cur_msg is None and first not in TOP_KW:
-            model.err(i, stripped, "linha fora de contexto (agente/capacidade/mensagem)",
+            model.err(i, stripped, "line out of context (agent/capability/message)",
                       "orphan")
             continue
 
         if cur_msg:
             if first not in MSG_KW:
-                model.err(i, stripped, f"token desconhecido em mensagem: {first!r}",
+                model.err(i, stripped, f"unknown token in message: {first!r}",
                           "unknown-token")
             elif first == "EXPECT":
                 rest = stripped[len("EXPECT"):].strip()
@@ -249,17 +249,17 @@ def analyze(src: str) -> Model:
                         w = float(wm.group(1))
                         if not (0 < w <= 1):
                             model.err(i, wm.group(1),
-                                      f"peso de cláusula fora de (0,1]: {w}", "clause-weight", 2)
+                                      f"clause weight outside (0,1]: {w}", "clause-weight", 2)
                     except ValueError:
-                        model.err(i, wm.group(1), f"peso inválido: {wm.group(1)}",
+                        model.err(i, wm.group(1), f"invalid weight: {wm.group(1)}",
                                   "clause-weight", 2)
             elif first == "BY":
                 val = stripped.split(None, 1)[1].strip() if " " in stripped else ""
                 if not TS_RE.match(val):
-                    model.err(i, val, f"deadline não é RFC3339: {val!r}", "bad-deadline", 2)
+                    model.err(i, val, f"deadline is not RFC3339: {val!r}", "bad-deadline", 2)
         continue
 
-    # parser canônico: fonte da verdade + semântica
+    # canonical parser: source of truth + semantics
     try:
         doc = parse_text(src)
         model.parse_ok = True
@@ -274,12 +274,12 @@ def analyze(src: str) -> Model:
                                     f"parser: {e}", "parse", 1))
         else:
             model.diags.append(Diag(0, 0, 0, f"parser: {e}", "parse", 1))
-    except Exception as e:  # IndexError de @msgN etc.
+    except Exception as e:  # IndexError from @msgN etc.
         model.parse_ok = False
         model.parse_error = str(e)
         model.diags.append(Diag(0, 0, 0, f"parser: {e}", "parse", 1))
 
-    # desduplica diagnostics na mesma posição/mensagem
+    # dedupe diagnostics at the same position/message
     seen, out = set(), []
     for d in sorted(model.diags, key=lambda d: (d.line, d.col0)):
         k = (d.line, d.col0, d.msg)
@@ -291,10 +291,10 @@ def analyze(src: str) -> Model:
 
 
 def context_at(model: Model, line_idx: int) -> dict:
-    """Contexto da linha: top | capability | message (para completion).
+    """Line context: top | capability | message (for completion).
 
-    Regra: o último BLOCO aberto antes da linha (agent/provides/message,
-    em ordem temporal) determina o contexto.
+    Rule: the last BLOCK opened before the line (agent/provides/message,
+    in temporal order) determines the context.
     """
     blocks = []
     for name, c in model.caps.items():
@@ -311,7 +311,7 @@ def context_at(model: Model, line_idx: int) -> dict:
                 ctx = {"kind": "capability", "cap": name}
             elif kind == "message":
                 ctx = {"kind": "message"}
-            else:  # agent: mantém bloco anterior neutro (top)
+            else:  # agent: keeps the previous neutral block (top)
                 ctx = {"kind": "top", "cap": None}
     return ctx
 
@@ -364,7 +364,7 @@ class Server:
 
     def _handle(self, msg: dict):
         method, mid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
-        if method is None:  # resposta a algo que não enviamos; ignora
+        if method is None:  # response to something we did not send; ignore
             return
         if method == "initialize":
             return {
@@ -408,7 +408,7 @@ class Server:
             raise SystemExit(0 if self.shutdown else 1)
         if mid is not None:
             return {"__error__": {"code": -32601,
-                                  "message": f"método não suportado: {method}"}}
+                                  "message": f"unsupported method: {method}"}}
         return None
 
     def _send(self, obj):
@@ -433,11 +433,11 @@ class Server:
             items.append({"label": label, "kind": kind, "detail": detail,
                           "filterText": label})
 
-        # prefixos especiais: completar valores, não keywords
+        # special prefixes: complete values, not keywords
         mfb = re.match(r'^(.*FALLBACK\s*->\s*)$', prefix, re.I)
         if mfb:
             for a in model.agents.values():
-                add(f'"{a["id"]}"', 2, "id de agente")  # 2 = Value
+                add(f'"{a["id"]}"', 2, "agent id")  # 2 = Value
             return items
         mact = re.match(r'^\s*([A-Za-z_]+\s+)$', prefix)
         if mact and mact.group(1).split()[0].lower() in {"request", "propose",
@@ -488,19 +488,19 @@ class Server:
             a = model.agents[word]
             prov = ", ".join(a["provides"]) or "—"
             return {"contents": {"kind": "markdown",
-                                  "value": f"**agente `{word}`**\n\n"
+                                  "value": f"**agent `{word}`**\n\n"
                                            f"- id: `{a['id']}`\n- provides: {prov}"}}
         if word in model.caps:
             c = model.caps[word]
             return {"contents": {"kind": "markdown",
                                   "value": f"**capability `{word}`**\n\n"
-                                           f"- versão: v{c['version']}\n"
-                                           f"- declarada por: `{c['by']}`"}}
+                                           f"- version: v{c['version']}\n"
+                                           f"- declared by: `{c['by']}`"}}
         mref = MSGREF_RE.match(word)
         if mref and 1 <= int(mref.group(1)) <= len(model.messages):
             mi = model.messages[int(mref.group(1)) - 1]
             return {"contents": {"kind": "markdown",
-                                  "value": f"**`{word}`** — mensagem nº "
+                                  "value": f"**`{word}`** — message #"
                                            f"{mref.group(1)}: `{mi['frm']} → {mi['to']}`"}}
         return None
 
@@ -530,7 +530,7 @@ class Server:
         for i, m in enumerate(model.messages, 1):
             out.append({
                 "name": f"msg{i}: {m['frm']} → {m['to']}",
-                "detail": "mensagem",
+                "detail": "message",
                 "kind": 10,  # Method
                 "range": rng(m["line"]), "selectionRange": rng(m["line"]),
             })
@@ -546,7 +546,7 @@ def serve():
         try:
             msg = read_message(inp)
         except (json.JSONDecodeError, ValueError) as e:
-            sys.stderr.write(f"parley-lsp: framing inválido: {e}\n")
+            sys.stderr.write(f"parley-lsp: invalid framing: {e}\n")
             continue
         if msg is None:
             return
@@ -555,10 +555,10 @@ def serve():
         except SystemExit as e:
             sys.stdout.buffer.flush()
             raise e
-        except Exception as e:  # nunca derruba o server por 1 documento
-            sys.stderr.write(f"parley-lsp: erro em {msg.get('method')}: {e}\n")
+        except Exception as e:  # never kills the server over 1 document
+            sys.stderr.write(f"parley-lsp: error in {msg.get('method')}: {e}\n")
             if msg.get("id") is not None:
-                result = {"code": -32603, "message": f"erro interno: {e}"}
+                result = {"code": -32603, "message": f"internal error: {e}"}
         if msg.get("id") is not None and result is not None:
             if "__error__" in result:
                 srv._send({"jsonrpc": "2.0", "id": msg["id"],

@@ -35,7 +35,7 @@ func LockedWrite(path string, b []byte, perm os.FileMode) error {
 			continue
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("parley: lock: timeout aguardando %s", lockPath)
+			return fmt.Errorf("parley: lock: timeout waiting for %s", lockPath)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

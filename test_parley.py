@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PARLEY v0 — testes da referência Python (ranking por weight + thread).
+"""PARLEY v0 — Python reference tests (weight ranking + thread).
 
-Rode: python3 -m pytest test_parley.py -q   (ou: python3 test_parley.py)
+Run: python3 -m pytest test_parley.py -q   (or: python3 test_parley.py)
 """
 from __future__ import annotations
 import json
@@ -36,7 +36,7 @@ def _msg(frm, to, act, target=None, parent=None, body=None, conf=None,
 
 
 def _with_id(m):
-    """Atribui id de conteúdo (espelho do AssignID do Go)."""
+    """Assigns a content id (mirrors the Go AssignID)."""
     import hashlib
     from parley import canonical_bytes
     tmp = {k: v for k, v in m.items() if k not in ("id", "signature")}
@@ -45,14 +45,14 @@ def _with_id(m):
 
 
 def parent_with_weights():
-    """request com contrato ponderado: c1 conf>0.85 (1.0),
+    """request with a weighted contract: c1 conf>0.85 (1.0),
     c2 route.eta_min<=150 (0.9), c3 nl (0.9). Total 2.8."""
     p = _msg("planner-42", "dispatcher-7", "request", target="route.plan",
              body={"origin": "Lisboa", "dest": "Porto"})
     p["expect"] = [
         {"id": "c1", "check": {"field": "confidence", "op": "gt", "value": 0.85}, "weight": 1.0},
         {"id": "c2", "check": {"field": "route.eta_min", "op": "lte", "value": 150}, "weight": 0.9},
-        {"id": "c3", "nl": "evitar obras nas próximas 24h", "weight": 0.9},
+        {"id": "c3", "nl": "avoid roadworks in the next 24h", "weight": 0.9},
     ]
     return _with_id(p)
 
@@ -78,8 +78,8 @@ def test_ranking_order():
     assert r["top"]["proposal"]["id"] == b["id"]
     assert abs(r["top"]["score"] - 1.0) < 1e-9
     by = {e["proposal"]["id"]: e["score"] for e in r["entries"]}
-    assert by[a["id"]] == 0.0  # nl não aceita -> violação -> 0
-    assert by[c["id"]] == 0.0  # c2 violada -> 0
+    assert by[a["id"]] == 0.0  # nl not accepted -> violation -> 0
+    assert by[c["id"]] == 0.0  # c2 violated -> 0
 
 
 def test_ranking_tiebreak_confidence():
@@ -97,7 +97,7 @@ def test_ranking_inert_clause():
     p = _msg("a", "b", "request")
     p["expect"] = [
         {"id": "x", "check": {"field": "confidence", "op": "gt", "value": 0.85}, "weight": 1.0},
-        {"id": "y", "nl": "cláusula inativa", "weight": 0.0},
+        {"id": "y", "nl": "inactive clause", "weight": 0.0},
     ]
     _with_id(p)
     off = _with_id(_msg("b", "a", "propose", parent=p["id"], conf=0.9))
@@ -113,7 +113,7 @@ def test_ranking_no_offers():
     assert r["entries"] == [] and r["top"] is None
     acc = _with_id(_msg("b", "a", "accept", parent=p["id"]))
     r2 = rank_proposals(p, [acc])
-    assert r2["entries"] == []  # accept não é oferta
+    assert r2["entries"] == []  # accept is not an offer
 
 
 # ---------------------------------------------------------------- thread
@@ -139,7 +139,7 @@ def test_thread_happy_path():
                          target="route.plan", parent=acc["id"]))
     try:
         th.apply(late)
-        raise AssertionError("ato após settle deveria falhar")
+        raise AssertionError("act after settle should fail")
     except ValueError:
         pass
     assert len(th.trace) == 4
@@ -150,12 +150,12 @@ def test_thread_open_requires_request():
     for act in ("inform", "ask"):
         try:
             th.apply(_with_id(_msg("a", "b", act)))
-            raise AssertionError(f"{act} não deveria abrir thread")
+            raise AssertionError(f"{act} should not open a thread")
         except ValueError:
             pass
     try:
-        th.apply(_with_id(_msg("a", "b", "request")))  # sem target
-        raise AssertionError("request sem target não deveria abrir")
+        th.apply(_with_id(_msg("a", "b", "request")))  # without target
+        raise AssertionError("request without target should not open")
     except ValueError:
         pass
     assert th.state == "new"
@@ -168,7 +168,7 @@ def test_thread_counter_without_offer():
     cn = _with_id(_msg("b", "a", "counter", target="route.plan", parent=req["id"]))
     try:
         th.apply(cn)
-        raise AssertionError("counter sem oferta deveria falhar")
+        raise AssertionError("counter without offer should fail")
     except ValueError:
         pass
 
@@ -184,7 +184,7 @@ def test_thread_reject_and_cancel_end():
         prop = _with_id(_msg("b", "a", "propose", target="route.plan", parent=m["id"]))
         try:
             th.apply(prop)
-            raise AssertionError(f"propose após {act} deveria falhar")
+            raise AssertionError(f"propose after {act} should fail")
         except ValueError:
             pass
 
@@ -213,17 +213,17 @@ def test_thread_loop_cap():
     over = _with_id(_msg("b", "a", "counter", target="route.plan", parent=last))
     try:
         th.apply(over)
-        raise AssertionError("oferta além do teto deveria falhar")
+        raise AssertionError("offer beyond the cap should fail")
     except ValueError:
         pass
     assert th.offer_count == 2
 
 
 def test_thread_from_example_file():
-    """A negociação de examples/negociacao.parley é uma thread válida:
+    """The negotiation in examples/negotiation.parley is a valid thread:
     request -> propose -> accept (settled)."""
     src = open(os.path.join(os.path.dirname(__file__),
-                            "examples", "negociacao.parley")).read()
+                            "examples", "negotiation.parley")).read()
     doc = parse_text(src)
     msgs = finalize(doc)
     th = thread_from(8, msgs)
@@ -241,50 +241,50 @@ def test_thread_trace_states():
 
 
 def test_ranking_interop_fixture_matches_go():
-    """Interop: o MESMO fixture validado pelo Go (TestInteropRankingGoMatchesPython)
-    deve produzir a MESMA ordenação e scores no Python. O weight-ranking é
-    parte do protocolo, não do SDK — os dois lados convergem no fixture."""
+    """Interop: the SAME fixture validated by Go (TestInteropRankingGoMatchesPython)
+    must produce the SAME ordering and scores in Python. The weight-ranking is
+    part of the protocol, not the SDK — both sides converge on the fixture."""
     fx_path = os.path.join(os.path.dirname(__file__),
                            "sdk", "go", "testdata", "interop-ranking.json")
     if not os.path.exists(fx_path):
-        return  # fixture ausente (mesma política de skip do Go)
+        return  # fixture missing (same skip policy as the Go side)
     fx = json.load(open(fx_path))
     r = rank_proposals(fx["parent"], fx["proposals"])
     assert len(r["entries"]) == len(fx["expected"]), \
-        f"entradas = {len(r['entries'])}, esperado {len(fx['expected'])}"
+        f"entries = {len(r['entries'])}, expected {len(fx['expected'])}"
     for i, ex in enumerate(fx["expected"]):
         got = r["entries"][i]
         assert got["proposal"]["id"] == ex["id"], \
-            f"ordem[{i}] = {got['proposal']['id']}, esperado {ex['id']}"
+            f"order[{i}] = {got['proposal']['id']}, expected {ex['id']}"
         assert abs(got["score"] - ex["score"]) < 1e-9, \
-            f"score[{i}] = {got['score']}, esperado {ex['score']}"
+            f"score[{i}] = {got['score']}, expected {ex['score']}"
 
 
-# ---------------------------------------------------------------- keystore / acordos / v1
+# ---------------------------------------------------------------- keystore / agreements / v1
 
 def test_keystore_real_keys_sign_and_reload(tmp_path=None):
     import tempfile, os, stat
     if not _HAVE_ED25519:
-        return  # cryptography ausente: caminho de produção indisponível
+        return  # cryptography missing: production path unavailable
     tmp = tmp_path or tempfile.mkdtemp()
     path = os.path.join(tmp, "keys.json")
     ks = KeyStore()
     ks.generate("worker-1", "acme")
     ks.save(path)
-    if os.name != "nt":  # permissões POSIX; Windows não as expressa em st_mode
+    if os.name != "nt":  # POSIX permissions; Windows does not express them in st_mode
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
     m = _with_id(_msg("worker-1", "planner-1", "inform"))
     signed = ks.sign_message(m, "worker-1", "acme")
     ok, why = verify(signed)
-    assert ok and "chave do card" in why, why
+    assert ok and "card key" in why, why
 
     reloaded = KeyStore()
     reloaded.load(path)
     signed2 = reloaded.sign_message(m, "worker-1", "acme")
     assert signed2["signature"]["sig"] == signed["signature"]["sig"]
 
-    # tamper: o corpo muda -> id muda -> assinatura cai
+    # tamper: the body changes -> id changes -> signature fails
     tampered = dict(signed, body={"x": 1})
     ok, _ = verify(tampered)
     assert not ok
@@ -301,11 +301,11 @@ def test_composite_checks_v1_schema():
     ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 100, "toll_free": True}}})
     assert ok
     ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 151, "toll_free": True}}})
-    assert not ok          # all_of falhou
+    assert not ok          # all_of failed
     ok, _ = check_clause(chk, {"body": {"route": {"eta_min": 140, "toll_free": False}}})
-    assert not ok          # any_of sem braço ativo
+    assert not ok          # any_of with no active branch
 
-    # v1 aceita composite; v0 rejeita
+    # v1 accepts composite; v0 rejects
     m = _with_id(_msg("planner-42", "dispatcher-7", "propose", target="route.plan"))
     m["v"] = 1
     m["expect"] = [dict(chk, id="composite", weight=1)]
@@ -334,11 +334,11 @@ def test_agreement_build_sign_verify_and_tamper():
     assert agr["provider"]["id"] == "dispatcher-7"
     assert "id" not in agr and "signatures" not in agr
 
-    # thread mismatch deve falhar
+    # thread mismatch must fail
     bad = dict(acc, parent="msg:0000000000000000")
     try:
         build_agreement(req, offer, bad)
-        raise AssertionError("thread mismatch aceito")
+        raise AssertionError("thread mismatch accepted")
     except ValueError:
         pass
 
@@ -349,10 +349,10 @@ def test_agreement_build_sign_verify_and_tamper():
     ok, why = verify_agreement(single)
     assert ok, why
 
-    # adulteração invalida o id de conteúdo
+    # tampering invalidates the content id
     tampered = dict(single, binding_clauses=["c1", "c3"])
     ok, why = verify_agreement(tampered)
-    assert not ok and why == "id de conteúdo divergente"
+    assert not ok and why == "content id mismatch"
 
     both = sign_agreement(single, "dispatcher-7", ks, "acme")
     assert len(both["signatures"]) == 2
@@ -372,7 +372,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             failed += 1
             print(f"FAIL {fn.__name__}: {e!r}")
-    print(f"\n{len(fns) - failed}/{len(fns)} testes passaram")
+    print(f"\n{len(fns) - failed}/{len(fns)} tests passed")
     sys.exit(1 if failed else 0)
 
 

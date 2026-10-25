@@ -1,10 +1,10 @@
 // Command parleygo parses .parley files, assigns content-addressed ids,
 // signs (deterministic test keys) and prints the canonical JSON.
 //
-// uso: parleygo <arquivo.parley> [--sign] [--thread]
+// usage: parleygo <file.parley> [--sign] [--thread]
 //
-//	--thread  também imprime a thread (máquina de estados dos acts) da
-//	          primeira negociação do arquivo (states + trace)
+//	--thread  also prints the thread (the acts' state machine) of the
+//	          first negotiation in the file (states + trace)
 package main
 
 import (
@@ -17,17 +17,17 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("uso: parleygo <arquivo.parley> [--sign]")
+		fmt.Println("usage: parleygo <file.parley> [--sign]")
 		os.Exit(1)
 	}
 	src, err := os.ReadFile(os.Args[1])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "erro:", err)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 	doc, err := parley.ParseText(string(src))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "erro de sintaxe:", err)
+		fmt.Fprintln(os.Stderr, "syntax error:", err)
 		os.Exit(1)
 	}
 	msgs := parley.Finalize(doc)

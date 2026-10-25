@@ -54,12 +54,12 @@ func ValidateWith(m *Message, parent *Message, now time.Time, contracts map[stri
 
 	out["tenant_ok"] = m.Tenant != ""
 	if m.Tenant == "" {
-		out["warnings"] = append(out["warnings"].([]string), "sem tenant (exigível em deploy multi-tenant)")
+		out["warnings"] = append(out["warnings"].([]string), "missing tenant (required in multi-tenant deployments)")
 	}
 
 	if m.Deadline != "" {
 		if dl, err := time.Parse("2006-01-02T15:04:05Z", m.Deadline); err == nil && dl.Before(now) {
-			out["warnings"] = append(out["warnings"].([]string), "deadline expirado: "+m.Deadline)
+			out["warnings"] = append(out["warnings"].([]string), "expired deadline: "+m.Deadline)
 		}
 	}
 
@@ -69,10 +69,10 @@ func ValidateWith(m *Message, parent *Message, now time.Time, contracts map[stri
 			out["body_contract"] = BodyContract(m, cap)
 			bc := out["body_contract"].(map[string]any)
 			for _, w := range bc["violations"].([]string) {
-				out["warnings"] = append(out["warnings"].([]string), "contrato de corpo: "+w)
+				out["warnings"] = append(out["warnings"].([]string), "body contract: "+w)
 			}
 			for _, w := range bc["warnings"].([]string) {
-				out["warnings"] = append(out["warnings"].([]string), "contrato de corpo: "+w)
+				out["warnings"] = append(out["warnings"].([]string), "body contract: "+w)
 			}
 		}
 	}
@@ -88,9 +88,9 @@ func ValidateWith(m *Message, parent *Message, now time.Time, contracts map[stri
 			switch {
 			case c.NL != "":
 				binding := accepted[c.ID]
-				detail := "NÃO aceita explicitamente -> não vinculante"
+				detail := "not explicitly accepted -> non-binding"
 				if binding {
-					detail = "aceite explícito"
+					detail = "explicitly accepted"
 				}
 				clauses = append(clauses, map[string]any{
 					"id": c.ID, "nl": c.NL, "binding": binding, "detail": detail,
@@ -123,7 +123,7 @@ func isContractAct(act string) bool {
 // v0 leaf checks and v1 all_of/any_of compositions (which may be combined).
 func CheckClause(cl Clause, m *Message) (bool, string) {
 	if cl.Check == nil {
-		return true, "nl (sem verificação de máquina)"
+		return true, "nl (no machine check)"
 	}
 	return checkAny(*cl.Check, m)
 }
@@ -194,7 +194,7 @@ func checkLeaf(chk Check, m *Message) (bool, string) {
 		return ok, fmt.Sprintf("%s=%s (regex %s)", chk.Field, pyRepr(actual), pyRepr(chk.Value))
 	case "lt", "lte", "gt", "gte", "eq":
 		if actual == nil {
-			return false, "campo ausente: " + chk.Field
+			return false, "missing field: " + chk.Field
 		}
 		a, aok := asFloat(actual)
 		v, vok := asFloat(chk.Value)
@@ -203,7 +203,7 @@ func checkLeaf(chk Check, m *Message) (bool, string) {
 				eq := fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", chk.Value)
 				return eq, fmt.Sprintf("%s=%s (eq %s)", chk.Field, pyRepr(actual), pyRepr(chk.Value))
 			}
-			return false, fmt.Sprintf("%s=%s: operador %s exige numéricos", chk.Field, pyRepr(actual), chk.Op)
+			return false, fmt.Sprintf("%s=%s: operator %s requires numbers", chk.Field, pyRepr(actual), chk.Op)
 		}
 		var ok bool
 		switch chk.Op {
@@ -220,7 +220,7 @@ func checkLeaf(chk Check, m *Message) (bool, string) {
 		}
 		return ok, fmt.Sprintf("%s=%s (%s %s)", chk.Field, pyRepr(actual), chk.Op, pyRepr(chk.Value))
 	default:
-		return false, "operador desconhecido: " + chk.Op
+		return false, "unknown operator: " + chk.Op
 	}
 }
 
@@ -268,7 +268,7 @@ func schemaValidateErr(v any, version int) error {
 		return nil
 	}
 	if version > 1 {
-		return fmt.Errorf("versão de protocolo não suportada: %d", version)
+		return fmt.Errorf("unsupported protocol version: %d", version)
 	}
 	if err := schemaV1.Validate(v); err != nil {
 		return err

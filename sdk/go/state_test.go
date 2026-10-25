@@ -46,7 +46,7 @@ func TestThreadHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.OfferCount != 2 {
-		t.Fatalf("counter deveria contar como oferta: %d", th.OfferCount)
+		t.Fatalf("counter should count as an offer: %d", th.OfferCount)
 	}
 
 	acc := threadMsg(t, "dispatcher-7", "planner-42", "accept", "route.plan", cntr.ID, t0.Add(3*time.Minute))
@@ -54,16 +54,16 @@ func TestThreadHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.State != StateSettled {
-		t.Fatalf("após accept: %s", th.State)
+		t.Fatalf("after accept: %s", th.State)
 	}
 
-	// thread encerrada: qualquer ato seguinte é inválido
+	// thread closed: any following act is invalid
 	late := threadMsg(t, "planner-42", "dispatcher-7", "propose", "route.plan", acc.ID, t0.Add(4*time.Minute))
 	if err := th.Apply(late); err == nil {
-		t.Fatal("ato após settle deveria ser inválido")
+		t.Fatal("act after settle should be invalid")
 	}
 	if len(th.Trace) != 4 {
-		t.Fatalf("trace = %d passos, esperado 4 (o inválido não entra)", len(th.Trace))
+		t.Fatalf("trace = %d steps, expected 4 (the invalid one does not count)", len(th.Trace))
 	}
 }
 
@@ -71,23 +71,23 @@ func TestThreadOpenRequiresRequest(t *testing.T) {
 	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	th := NewThread(0)
 
-	// inform não abre thread
+	// inform does not open a thread
 	inf := threadMsg(t, "a", "b", "inform", "", "", t0)
 	if err := th.Apply(inf); err == nil {
-		t.Fatal("inform não deveria abrir thread")
+		t.Fatal("inform should not open a thread")
 	}
 	if th.State != StateNew {
-		t.Fatalf("estado após inform = %s, esperado new", th.State)
+		t.Fatalf("state after inform = %s, expected new", th.State)
 	}
-	// request SEM target não abre
+	// request WITHOUT target does not open
 	req := threadMsg(t, "a", "b", "request", "", "", t0)
 	if err := th.Apply(req); err == nil {
-		t.Fatal("request sem target não deveria abrir thread")
+		t.Fatal("request without target should not open a thread")
 	}
-	// propose não abre
+	// propose does not open
 	pro := threadMsg(t, "a", "b", "propose", "route.plan", "", t0)
 	if err := th.Apply(pro); err == nil {
-		t.Fatal("propose não deveria abrir thread")
+		t.Fatal("propose should not open a thread")
 	}
 }
 
@@ -98,10 +98,10 @@ func TestThreadCounterWithoutOffer(t *testing.T) {
 	if err := th.Apply(req); err != nil {
 		t.Fatal(err)
 	}
-	// counter direto, sem proposta anterior
+	// direct counter, no previous offer
 	cn := threadMsg(t, "b", "a", "counter", "route.plan", req.ID, t0.Add(time.Minute))
 	if err := th.Apply(cn); err == nil {
-		t.Fatal("counter sem oferta anterior deveria ser inválido")
+		t.Fatal("counter without a previous offer should be invalid")
 	}
 }
 
@@ -117,12 +117,12 @@ func TestThreadRejectEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.State != StateRejected {
-		t.Fatalf("após reject: %s", th.State)
+		t.Fatalf("after reject: %s", th.State)
 	}
-	// não há "rejeito e depois proponho de novo"
+	// there is no "I reject and then propose again"
 	prop := threadMsg(t, "b", "a", "propose", "route.plan", rej.ID, t0.Add(2*time.Minute))
 	if err := th.Apply(prop); err == nil {
-		t.Fatal("propose após reject deveria ser inválido")
+		t.Fatal("propose after reject should be invalid")
 	}
 }
 
@@ -138,7 +138,7 @@ func TestThreadCancelEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.State != StateRejected {
-		t.Fatalf("após cancel: %s (cancel encerra sem acordo)", th.State)
+		t.Fatalf("after cancel: %s (cancel ends without agreement)", th.State)
 	}
 }
 
@@ -152,15 +152,15 @@ func TestThreadDelegateKeepsGoing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.State != StateNegotiating {
-		t.Fatalf("delegate não muda o estado: %s", th.State)
+		t.Fatalf("delegate does not change the state: %s", th.State)
 	}
-	// o reencaminhado pode responder
+	// the delegate can reply
 	prop := threadMsg(t, "c", "a", "propose", "route.plan", del.ID, t0.Add(2*time.Minute))
 	if err := th.Apply(prop); err != nil {
 		t.Fatal(err)
 	}
 	if th.LastOffer != prop.ID {
-		t.Fatal("oferta do reencaminhado não registrada")
+		t.Fatal("delegate's offer not recorded")
 	}
 }
 
@@ -174,13 +174,13 @@ func TestThreadLateralActs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if th.State != StateNegotiating {
-		t.Fatalf("inform lateral mudou o estado: %s", th.State)
+		t.Fatalf("lateral inform changed the state: %s", th.State)
 	}
 }
 
 func TestThreadLoopCap(t *testing.T) {
 	t0 := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
-	th := NewThread(2) // teto de 2 ofertas
+	th := NewThread(2) // cap of 2 offers
 	req := threadMsg(t, "a", "b", "request", "route.plan", "", t0)
 	_ = th.Apply(req)
 	last := req.ID
@@ -191,17 +191,17 @@ func TestThreadLoopCap(t *testing.T) {
 		}
 		om := threadMsg(t, "b", "a", act, "route.plan", last, t0.Add(time.Duration(i)*time.Minute))
 		if err := th.Apply(om); err != nil {
-			t.Fatalf("oferta %d: %v", i, err)
+			t.Fatalf("offer %d: %v", i, err)
 		}
 		last = om.ID
 	}
-	// 3ª oferta excede o teto
+	// 3rd offer exceeds the cap
 	over := threadMsg(t, "b", "a", "counter", "route.plan", last, t0.Add(3*time.Minute))
 	if err := th.Apply(over); err == nil {
-		t.Fatal("oferta além do teto deveria ser inválida")
+		t.Fatal("offer beyond the cap should be invalid")
 	}
 	if th.OfferCount != 2 {
-		t.Fatalf("offerCount = %d, esperado 2 (a inválida não conta)", th.OfferCount)
+		t.Fatalf("offerCount = %d, expected 2 (the invalid one does not count)", th.OfferCount)
 	}
 }
 
@@ -217,13 +217,13 @@ func TestThreadFromMessages(t *testing.T) {
 	if th.State != StateSettled || len(th.Trace) != 3 {
 		t.Fatalf("thread: state=%s trace=%d", th.State, len(th.Trace))
 	}
-	// sequência inválida: a PRIMEIRA violação é reportada
-	bad := []*Message{req, acc, prop} // accept antes de qualquer oferta? — gramaticalmente
-	// accept direto após request é válido (aceitar o pedido sem proposta).
-	// Para inválida: counter sem oferta.
+	// invalid sequence: the FIRST violation is reported
+	bad := []*Message{req, acc, prop} // accept before any offer? — grammatically
+	// a direct accept after request is valid (accepting the request without a proposal).
+	// For an invalid one: counter without offer.
 	bad2 := []*Message{req, threadMsg(t, "b", "a", "counter", "route.plan", req.ID, t0.Add(time.Minute))}
 	if _, err := NewThreadFrom(0, bad2); err == nil {
-		t.Fatal("counter sem oferta deveria falhar em NewThreadFrom")
+		t.Fatal("counter without offer should fail in NewThreadFrom")
 	}
 	_ = bad
 }

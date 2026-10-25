@@ -189,30 +189,30 @@ func WithCardRegistry(registry *parley.Registry) Option {
 func (in *Inbox) Deliver(raw []byte) *Result {
 	var m parley.Message
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return &Result{Status: StatusRejected, Reason: "json inválido: " + err.Error()}
+		return &Result{Status: StatusRejected, Reason: "invalid json: " + err.Error()}
 	}
 	if m.ID == "" {
-		return &Result{Status: StatusRejected, Reason: "mensagem sem id de conteúdo"}
+		return &Result{Status: StatusRejected, Reason: "message without content id"}
 	}
 	res := &Result{ID: m.ID}
 
 	// 1) schema
 	if !parley.SchemaValid(parley.MessageToAny(&m)) {
 		res.Status = StatusRejected
-		res.Reason = "schema v0 inválido"
+		res.Reason = "invalid schema v0"
 		return res
 	}
 	// 2) signature (mandatory in the trust model)
 	ok, why := in.verify(&m)
 	if !ok {
 		res.Status = StatusRejected
-		res.Reason = "assinatura: " + why
+		res.Reason = "signature: " + why
 		return res
 	}
 	// 3) tenant isolation (when the inbox is tenant-scoped)
 	if in.tenant != "" && m.Tenant != in.tenant {
 		res.Status = StatusRejected
-		res.Reason = "tenant errado: " + m.Tenant
+		res.Reason = "wrong tenant: " + m.Tenant
 		return res
 	}
 	// 4) replay/idempotency: content-addressed id already seen
@@ -220,7 +220,7 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 	if in.seen[m.ID] {
 		in.mu.Unlock()
 		res.Status = StatusDuplicate
-		res.Reason = "id de conteúdo já entregue (replay)"
+		res.Reason = "content id already delivered (replay)"
 		return res
 	}
 	parent, hasParent := in.store[m.Parent]
@@ -235,7 +235,7 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 		warns, _ := v["warnings"].([]string)
 		for _, c := range v["clauses"].([]map[string]any) {
 			if c["ok"] != nil && !c["ok"].(bool) {
-				warns = append(warns, "cláusula violada: "+c["id"].(string))
+				warns = append(warns, "clause violated: "+c["id"].(string))
 			}
 		}
 		res.Warnings = warns
@@ -249,10 +249,10 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 			}
 			res.Validation["body_contract"] = bc
 			for _, v := range bc["violations"].([]string) {
-				res.Warnings = append(res.Warnings, "contrato de corpo: "+v)
+				res.Warnings = append(res.Warnings, "body contract: "+v)
 			}
 			for _, w := range bc["warnings"].([]string) {
-				res.Warnings = append(res.Warnings, "contrato de corpo: "+w)
+				res.Warnings = append(res.Warnings, "body contract: "+w)
 			}
 		}
 	}
@@ -264,7 +264,7 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 	in.mu.Lock()
 	if m.Act == "request" && m.Target != "" {
 		th := parley.NewThread(0)
-		_ = th.Apply(&m) // abre a thread (request com target sempre passa)
+		_ = th.Apply(&m) // opens the thread (a request with target always passes)
 		in.threads[m.ID] = th
 	}
 	if m.Parent != "" {
@@ -306,7 +306,7 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 	res.Status = StatusAccepted
 	if needSave {
 		if err := in.Save(); err != nil {
-			res.Reason = "persistência: " + err.Error()
+			res.Reason = "persistence: " + err.Error()
 		}
 	}
 	return res

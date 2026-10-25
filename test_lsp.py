@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""PARLEY v0 — testes do LSP (cliente JSON-RPC real sobre stdio).
+"""PARLEY v0 — LSP tests (real JSON-RPC client over stdio).
 
-Sobe `python3 parley_lsp.py` como subprocess e valida:
+Spawns `python3 parley_lsp.py` as a subprocess and validates:
 initialize, publishDiagnostics (open/change/close), completion (keywords,
-capabilities, agentes), hover (keyword/agente/@msgN) e documentSymbol.
+capabilities, agents), hover (keyword/agent/@msgN) and documentSymbol.
 
-Rode: python3 -m pytest test_lsp.py -q   (ou: python3 test_lsp.py)
+Run: python3 -m pytest test_lsp.py -q   (or: python3 test_lsp.py)
 """
 from __future__ import annotations
 import json
@@ -18,13 +18,13 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXAMPLE = open(os.path.join(HERE, "examples", "negociacao.parley")).read()
+EXAMPLE = open(os.path.join(HERE, "examples", "negotiation.parley")).read()
 
-URI = "file:///tmp/negociacao.parley"
+URI = "file:///tmp/negotiation.parley"
 
 
 class LspClient:
-    """Cliente LSP mínimo: 1 thread de leitura, writes com framing."""
+    """Minimal LSP client: 1 reader thread, framed writes."""
 
     def __init__(self):
         self.proc = subprocess.Popen(
@@ -49,7 +49,7 @@ class LspClient:
             if line:
                 k, _, v = line.partition(":")
                 headers[k.strip().lower()] = v.strip()
-            while True:  # cabeçalhos até linha vazia
+            while True:  # headers until an empty line
                 l2 = f.readline()
                 if not l2:
                     return
@@ -84,7 +84,7 @@ class LspClient:
                 if mid in self._responses:
                     return self._responses.pop(mid)
             time.sleep(0.01)
-        raise TimeoutError(f"sem resposta para {method}")
+        raise TimeoutError(f"no response for {method}")
 
     def wait_event(self, method, timeout=5.0):
         t0 = time.time()
@@ -95,7 +95,7 @@ class LspClient:
                         del self._events[i]
                         return p
             time.sleep(0.01)
-        raise TimeoutError(f"sem evento {method}")
+        raise TimeoutError(f"no event {method}")
 
     def diags(self):
         p = self.wait_event("textDocument/publishDiagnostics")
@@ -135,9 +135,9 @@ def test_diagnostics_clean_example_then_broken():
         c.notify("initialized", {})
         c.notify("textDocument/didOpen", {"textDocument": {"uri": URI,
                 "languageId": "parley", "version": 1, "text": EXAMPLE}})
-        assert c.diags() == [], "exemplo limpo não deve ter diagnostics"
+        assert c.diags() == [], "clean example must not have diagnostics"
 
-        # muda para documento quebrado: agente não declarado + linha órfã
+        # switch to a broken document: undeclared agent + orphan line
         broken = (
             'agent "planner-42" as PLANNER\n'
             'PLANNER -> GHOST\n'
@@ -152,7 +152,7 @@ def test_diagnostics_clean_example_then_broken():
         assert "orphan" in codes, codes
         assert all(x["source"] == "parley" for x in d)
 
-        # fecha: server limpa o estado (sem crash) e reabre limpo
+        # close: server clears its state (no crash) and reopens clean
         c.notify("textDocument/didClose", {"textDocument": {"uri": URI}})
         c.notify("textDocument/didOpen", {"textDocument": {"uri": URI,
                 "languageId": "parley", "version": 3, "text": EXAMPLE}})
@@ -178,8 +178,8 @@ def test_semantic_diagnostics_msgref_and_weight():
                 "languageId": "parley", "version": 1, "text": bad}})
         d = c.diags()
         codes = {x["code"] for x in d}
-        assert "semref" in codes, codes       # @msg9 fora do alcance
-        assert "clause-weight" in codes, codes  # peso 2.5 fora de (0,1]
+        assert "semref" in codes, codes       # @msg9 out of range
+        assert "clause-weight" in codes, codes  # weight 2.5 outside (0,1]
     finally:
         c.stop()
 
@@ -200,17 +200,17 @@ def test_completion_top_message_capability():
         prov_line = next(i for i, l in enumerate(lines) if l.strip().startswith("provides"))
         in_line = next(i for i, l in enumerate(lines) if l.strip().startswith("input"))
 
-        # contexto de capability (linha de 'input origin : Location')
+        # capability context (line of 'input origin : Location')
         top = labels({"line": in_line, "character": 0})
         assert "INPUT" in top and "COST" in top, top
 
-        # contexto de mensagem (linha do ato 'request route.plan')
+        # message context (line of the act 'request route.plan')
         req_line = next(i for i, l in enumerate(lines)
                         if l.strip() == "request route.plan")
         msg_kw = labels({"line": req_line, "character": 0})
         assert "EXPECT" in msg_kw and "WITH" in msg_kw and "INTENT" in msg_kw, msg_kw
 
-        # completar fallback: ids de agentes
+        # complete fallback: agent ids
         fb_line = next(i for i, l in enumerate(lines)
                        if l.strip().startswith("fallback ->"))
         r = c.request("textDocument/completion", {
@@ -236,23 +236,23 @@ def test_hover_keyword_agent_msgref():
             res = r["result"]
             return res["contents"]["value"] if res else None
 
-        # keyword: 'request' na linha do ato
+        # keyword: 'request' on the act line
         req_line = next(i for i, l in enumerate(lines)
                         if l.strip() == "request route.plan")
         v = hover(req_line, lines[req_line].index("request") + 1)
-        assert v and "request" in v and "Abre uma negociação" in v, v
+        assert v and "request" in v and "Opens a negotiation" in v, v
 
-        # agente: 'DISPATCHER' no header
+        # agent: 'DISPATCHER' in the header
         hdr = next(i for i, l in enumerate(lines) if l.strip().startswith("PLANNER ->"))
         col = lines[hdr].index("DISPATCHER")
         v = hover(hdr, col + 1)
         assert v and "dispatcher-7" in v, v
 
-        # referência: '@msg1' em 'parent "@msg1"'
+        # reference: '@msg1' in 'parent "@msg1"'
         par = next(i for i, l in enumerate(lines) if 'parent "@msg1"' in l)
         col = lines[par].index("@msg1")
         v = hover(par, col + 1)
-        assert v and "mensagem nº 1" in v, v
+        assert v and "message #1" in v, v
     finally:
         c.stop()
 
@@ -282,7 +282,7 @@ def test_server_survives_garbage_and_unknown_method():
     try:
         r = c.request("foo/bar", {})
         assert r["error"]["code"] == -32601
-        # server continua vivo: initialize responde
+        # server still alive: initialize responds
         r = c.request("initialize", {"processId": None, "rootUri": None,
                                      "capabilities": {}})
         assert r["result"]["serverInfo"]["name"] == "parley-lsp"
@@ -302,5 +302,5 @@ if __name__ == "__main__":
                 fails += 1
                 print(f"FAIL {name}")
                 traceback.print_exc()
-    print(f"\n{fails} falhas" if fails else "\nTodos os testes passaram")
+    print(f"\n{fails} failures" if fails else "\nAll tests passed")
     sys.exit(1 if fails else 0)

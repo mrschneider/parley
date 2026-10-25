@@ -28,7 +28,7 @@ jobs:
       - name: LSP tests
         run: python3 test_lsp.py
       - name: CLI smoke (one-shot check)
-        run: python3 parley_lsp.py --check examples/negociacao.parley
+        run: python3 parley_lsp.py --check examples/negotiation.parley
 
   test-go:
     name: Go SDK

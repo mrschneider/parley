@@ -64,33 +64,33 @@ func TestSupervisorDeadlineEscalation(t *testing.T) {
 		t.Fatalf("deadline = %v", dl)
 	}
 	if len(sup.Pending()) != 1 {
-		t.Fatalf("Pending = %v, esperado 1", sup.Pending())
+		t.Fatalf("Pending = %v, expected 1", sup.Pending())
 	}
 
-	// antes do deadline: nada
+	// before the deadline: nothing
 	if d := sup.Tick(); len(d) != 0 {
-		t.Fatalf("escalou antes do deadline: %v", d)
+		t.Fatalf("escalated before the deadline: %v", d)
 	}
-	// no deadline: escalada ao fallback
+	// no deadline: escalation to the fallback
 	now := t0.Add(5 * time.Minute)
 	sup.WithClock(func() time.Time { return now })
 	del := sup.Tick()
 	if len(del) != 1 {
-		t.Fatalf("esperava 1 escalada no deadline, obtive %v", del)
+		t.Fatalf("expected 1 escalation at the deadline, got %v", del)
 	}
 	if del[0].Reason != "deadline" || del[0].To != "dispatcher-backup" {
-		t.Fatalf("escalada errada: %+v", del[0])
+		t.Fatalf("wrong escalation: %+v", del[0])
 	}
 	if len(sup.Pending()) != 0 {
-		t.Fatalf("escrow não liberado após escalada: %v", sup.Pending())
+		t.Fatalf("escrow not released after escalation: %v", sup.Pending())
 	}
-	// a inbox do fallback recebeu o envelope original (assinado pelo sender)
+	// the fallback inbox received the original envelope (signed by the sender)
 	if fbInbox.Len() != 1 {
-		t.Fatalf("inbox do fallback = %d, esperado 1 (envelope original entregue)", fbInbox.Len())
+		t.Fatalf("fallback inbox = %d, expected 1 (original envelope delivered)", fbInbox.Len())
 	}
-	// idempotência: tick de novo não re-escalada
+	// idempotency: ticking again does not re-escalate
 	if d := sup.Tick(); len(d) != 0 {
-		t.Fatalf("re-escalada após deadline: %v", d)
+		t.Fatalf("re-escalated after deadline: %v", d)
 	}
 }
 
@@ -107,20 +107,20 @@ func TestSupervisorDeclineEscalation(t *testing.T) {
 	if _, err := sup.Track(raw(t, req)); err != nil {
 		t.Fatal(err)
 	}
-	// primary rejeita explicitamente, MUITO antes do deadline
+	// primary explicitly rejects, LONG before the deadline
 	rej := buildReply(t, "dispatcher-7", "planner-42", "reject", req.ID)
 	sup.Decline(req.ID, rej.ID)
 	if len(got) != 1 || got[0] != "dispatcher-backup" {
-		t.Fatalf("decline não escalou imediatamente: %v", got)
+		t.Fatalf("decline did not escalate immediately: %v", got)
 	}
 	log := sup.SettleLog()
 	if len(log) != 1 || log[0].Reason != "decline" || log[0].ReplyID != rej.ID {
-		t.Fatalf("log de escalada errado: %+v", log)
+		t.Fatalf("wrong escalation log: %+v", log)
 	}
-	// deadline passa depois: nada (já liquidado)
+	// deadline passes later: nothing (already settled)
 	sup.WithClock(func() time.Time { return t0.Add(31 * time.Minute) })
 	if d := sup.Tick(); len(d) != 0 {
-		t.Fatalf("re-escalada após decline: %v", d)
+		t.Fatalf("re-escalated after decline: %v", d)
 	}
 }
 
@@ -137,21 +137,21 @@ func TestSupervisorReplyCancels(t *testing.T) {
 	if _, err := sup.Track(raw(t, req)); err != nil {
 		t.Fatal(err)
 	}
-	// primary responde (propose) antes do deadline -> cancela a escalada
+	// primary replies (propose) before the deadline -> cancels the escalation
 	prop := buildReply(t, "dispatcher-7", "planner-42", "propose", req.ID)
 	sup.Reply(req.ID, prop.ID)
-	// deadline passa: sem escalada
+	// deadline passes: no escalation
 	sup.WithClock(func() time.Time { return t0.Add(6 * time.Minute) })
 	if d := sup.Tick(); len(d) != 0 {
-		t.Fatalf("escalada apesar da resposta: %v", d)
+		t.Fatalf("escalated despite the reply: %v", d)
 	}
 	if calls != 0 {
-		t.Fatalf("fallback chamado %d vezes após reply", calls)
+		t.Fatalf("fallback called %d times after reply", calls)
 	}
-	// reject tardio após reply: no-op
+	// late reject after reply: no-op
 	sup.Decline(req.ID, "msg:late")
 	if calls != 0 {
-		t.Fatal("reject tardio após reply não deveria escalar")
+		t.Fatal("late reject after reply should not escalate")
 	}
 }
 
@@ -163,19 +163,19 @@ func TestSupervisorWire(t *testing.T) {
 		return &Result{Status: StatusAccepted}
 	})
 
-	// Wire: mensagem com deadline+fallback entra em escrow
+	// Wire: a message with deadline+fallback enters escrow
 	req := buildTracked(t, "planner-42", "dispatcher-7", "dispatcher-backup",
 		"2026-10-23T09:05:00Z")
 	sup.Wire(raw(t, req))
 	if len(sup.Pending()) != 1 {
-		t.Fatalf("Wire não colocou em escrow: %v", sup.Pending())
+		t.Fatalf("Wire did not put it in escrow: %v", sup.Pending())
 	}
 
 	// Wire: reply do primary cancela
 	prop := buildReply(t, "dispatcher-7", "planner-42", "propose", req.ID)
 	sup.Wire(raw(t, prop))
 	if len(sup.Pending()) != 0 {
-		t.Fatalf("Wire do reply não cancelou escrow: %v", sup.Pending())
+		t.Fatalf("Wire of the reply did not cancel escrow: %v", sup.Pending())
 	}
 
 	// Wire: reject do primary escala
@@ -185,21 +185,21 @@ func TestSupervisorWire(t *testing.T) {
 	rej := buildReply(t, "dispatcher-7", "planner-42", "reject", req2.ID)
 	sup.Wire(raw(t, rej))
 	if len(escalated) != 1 {
-		t.Fatalf("Wire do reject não escalou: %v", escalated)
+		t.Fatalf("Wire of the reject did not escalate: %v", escalated)
 	}
 }
 
 func TestSupervisorNoFallbackNoDeadline(t *testing.T) {
 	sup := NewSupervisor()
-	// sem deadline: não rastreável
+	// no deadline: not trackable
 	m := buildTracked(t, "a", "b", "c", "")
 	m.Deadline = ""
 	parley.AssignID(m)
 	m = parley.Sign(m, "a", "acme")
 	if _, err := sup.Track(raw(t, m)); err == nil {
-		t.Fatal("mensagem sem deadline deveria rejeitar Track")
+		t.Fatal("message without deadline should reject Track")
 	}
-	// sem fallback: rastreável, mas escalada é no-op
+	// no fallback: trackable, but escalation is a no-op
 	m2 := buildTracked(t, "a", "b", "c", "2026-10-23T09:01:00Z")
 	m2.Fallback = nil
 	parley.AssignID(m2)
@@ -209,7 +209,7 @@ func TestSupervisorNoFallbackNoDeadline(t *testing.T) {
 	}
 	sup.WithClock(func() time.Time { return t0.Add(2 * time.Minute) })
 	if d := sup.Tick(); len(d) != 0 {
-		t.Fatalf("sem fallback não há escalada: %v", d)
+		t.Fatalf("without fallback there is no escalation: %v", d)
 	}
 }
 
@@ -217,29 +217,29 @@ func TestDeliverFallbackRetarget(t *testing.T) {
 	req := buildTracked(t, "planner-42", "dispatcher-7", "dispatcher-backup",
 		"2026-10-23T09:05:00Z")
 	out := DeliverFallback(req)
-	// envelope original é imutável
+	// the original envelope is immutable
 	if req.Fallback == nil || req.To.ID != "dispatcher-7" {
 		t.Fatal("DeliverFallback mutou o original")
 	}
 	// fallback consumido, provenance estendida
 	if out.Fallback != nil {
-		t.Fatal("campo fallback deveria ser consumido no envelope de escalada")
+		t.Fatal("fallback field should have been consumed in the escalation envelope")
 	}
 	if len(out.Provenance) != 1 || out.Provenance[0] != req.ID {
-		t.Fatalf("provenance da escalada errada: %v", out.Provenance)
+		t.Fatalf("wrong escalation provenance: %v", out.Provenance)
 	}
-	// id de conteúdo invalidado (envelope mudou) — o chamador faz AssignID
-	// antes de re-assinar; o id antigo seria um mismatch de conteúdo
+	// content id invalidated (envelope changed) — the caller runs AssignID
+	// before re-signing; the old id would be a content mismatch
 	if out.ID != "" {
-		t.Fatal("escalada deveria invalidar o id de conteúdo (novo envelope)")
+		t.Fatal("escalation should invalidate the content id (new envelope)")
 	}
 }
 
 func TestSupervisorEndToEndThroughInbox(t *testing.T) {
-	// Cenário completo: sender faz request com deadline+fallback; o primary
-	// nunca responde; o supervisor escalar e o envelope (re-signado pelo
-	// sender, re-alvoçado) chega à inbox do fallback como mensagem NOVA
-	// (aceita, não replay).
+	// Full scenario: the sender makes a request with deadline+fallback; the
+	// primary never replies; the supervisor escalates and the envelope
+	// (re-signed by the sender, re-targeted) arrives at the fallback inbox
+	// as a NEW message (accepted, not a replay).
 	sup := NewSupervisor().WithClock(func() time.Time { return t0 })
 	fbInbox := NewInbox()
 	sup.RegisterSink("dispatcher-backup", func(to string, b []byte) *Result {
@@ -254,27 +254,27 @@ func TestSupervisorEndToEndThroughInbox(t *testing.T) {
 	sup.WithClock(func() time.Time { return t0.Add(5 * time.Minute) })
 	del := sup.Tick()
 	if len(del) != 1 {
-		t.Fatalf("escalada não disparou: %v", del)
+		t.Fatalf("escalation did not fire: %v", del)
 	}
-	// a escalada entrega o envelope ORIGINAL (assinado por planner-42):
-	// verificação de assinatura passa na inbox do fallback
+	// the escalation delivers the ORIGINAL envelope (signed by planner-42):
+	// signature verification passes at the fallback inbox
 	res := del[0]
 	if !strings.Contains(string(res.Delivered), "dispatcher-backup") {
-		t.Fatal("envelope escalado deveria ser o original (com fallback field)")
+		t.Fatal("escalated envelope should be the original (with fallback field)")
 	}
 	if fbInbox.Len() != 1 {
-		t.Fatalf("inbox do fallback deveria ter 1 mensagem, tem %d", fbInbox.Len())
+		t.Fatalf("fallback inbox should have 1 message, has %d", fbInbox.Len())
 	}
-	// e o re-target + re-sign do sender produz uma mensagem nova e verificável
+	// and the sender's re-target + re-sign produce a new, verifiable message
 	esc := DeliverFallback(req)
 	esc.To = parley.AgentRef{ID: "dispatcher-backup"}
-	parley.AssignID(esc) // novo envelope -> novo id de conteúdo
+	parley.AssignID(esc) // new envelope -> new content id
 	esc = parley.Sign(esc, "planner-42", "acme")
 	r := fbInbox.Deliver(raw(t, esc))
 	if r.Status != StatusAccepted {
-		t.Fatalf("escalada re-target+re-sign deveria ser aceita: %s (%s)", r.Status, r.Reason)
+		t.Fatalf("re-target+re-sign escalation should be accepted: %s (%s)", r.Status, r.Reason)
 	}
 	if fbInbox.Len() != 2 {
-		t.Fatalf("inbox do fallback = %d, esperado 2", fbInbox.Len())
+		t.Fatalf("fallback inbox = %d, expected 2", fbInbox.Len())
 	}
 }

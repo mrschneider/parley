@@ -71,7 +71,7 @@ func (s *WSServer) inbox(name string) (*Inbox, bool) {
 func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	in, ok := s.inbox(r.PathValue("name"))
 	if !ok {
-		http.Error(w, `{"error":"inbox não encontrado"}`, http.StatusNotFound)
+		http.Error(w, `{"error":"inbox not found"}`, http.StatusNotFound)
 		return
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
@@ -85,7 +85,7 @@ func (s *WSServer) handleWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if messageType != websocket.TextMessage {
-			_ = s.reply(conn, &Result{Status: StatusRejected, Reason: "somente text frames (JSON PARLEY)"})
+			_ = s.reply(conn, &Result{Status: StatusRejected, Reason: "text frames only (PARLEY JSON)"})
 			continue
 		}
 		if err := s.reply(conn, in.Deliver(raw)); err != nil {

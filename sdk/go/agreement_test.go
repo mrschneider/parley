@@ -17,7 +17,7 @@ func settlementMessages(t *testing.T) (*Message, *Message, *Message) {
 	request.Body = map[string]any{"origin": "Lisboa", "dest": "Porto"}
 	request.Expect = []Clause{
 		{ID: "c1", Check: &Check{Field: "route.eta_min", Op: "lte", Value: 150}, Weight: 1},
-		{ID: "c2", NL: "Evitar obras nas próximas 24h", Weight: 0.9},
+		{ID: "c2", NL: "Avoid roadworks in the next 24h", Weight: 0.9},
 	}
 	AssignID(request)
 	request = Sign(request, "planner-42", "acme")
@@ -93,7 +93,7 @@ func TestAgreementContentIDAndDualSignature(t *testing.T) {
 	tampered.BindingClauses = []string{"c1", "c2"}
 	if ok, why := VerifyAgreement(&tampered); ok {
 		t.Fatal("tampered agreement verified")
-	} else if why != "id de conteúdo divergente" {
+	} else if why != "content id mismatch" {
 		t.Fatalf("unexpected tamper reason: %s", why)
 	}
 
