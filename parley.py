@@ -182,7 +182,12 @@ def atomic_write_json(path: str, value, mode: int = 0o644) -> None:
         directory = os.path.dirname(path) or "."
         fd, tmp = tempfile.mkstemp(prefix=".parley-tmp-", dir=directory)
         try:
-            os.fchmod(fd, mode)
+            try:
+                os.fchmod(fd, mode)
+            except (AttributeError, OSError):
+                if os.name != "nt":
+                    raise
+                # Windows não suporta fchmod; mkstemp já cria restrito ao usuário
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
                 f.flush()
@@ -190,7 +195,11 @@ def atomic_write_json(path: str, value, mode: int = 0o644) -> None:
             os.replace(tmp, path)
         finally:
             if os.path.exists(tmp):
-                os.unlink(tmp)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    if os.name != "nt":
+                        raise
     finally:
         try:
             os.unlink(lock_path)

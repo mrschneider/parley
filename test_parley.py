@@ -271,7 +271,8 @@ def test_keystore_real_keys_sign_and_reload(tmp_path=None):
     ks = KeyStore()
     ks.generate("worker-1", "acme")
     ks.save(path)
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if os.name != "nt":  # permissões POSIX; Windows não as expressa em st_mode
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
     m = _with_id(_msg("worker-1", "planner-1", "inform"))
     signed = ks.sign_message(m, "worker-1", "acme")
