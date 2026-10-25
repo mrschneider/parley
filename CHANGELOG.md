@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-10-25
+
 ### Added
 - **Schema v1** (`schema/parley-v1.schema.json`): composite machine clauses
   `all_of`/`any_of` (recursive); v0 explicitly rejects composites. Validated
@@ -52,4 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test suites: 13 Python reference tests, 7 LSP tests (real JSON-RPC client),
   Go `go test ./...` including Python↔Go interop fixtures.
 
+[Unreleased]: https://github.com/mrschneider/parley/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/mrschneider/parley/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/mrschneider/parley/releases/tag/v0.1.0
