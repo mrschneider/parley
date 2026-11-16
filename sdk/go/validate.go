@@ -236,21 +236,15 @@ func asFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-// checkSchema validates m against the canonical v0 schema.
+// checkSchema validates m against the canonical schema selected by m.V.
+// The message tree is validated DIRECTLY: MessageToAny already produces
+// plain JSON values (map/slice/string/bool/nil/float64/int64), so the
+// previous canonical-marshal + json.Unmarshal round trip (used only to
+// obtain a "pure JSON" view) was pure overhead — it cost roughly as much
+// as the validation itself. The library compares numbers by value, so the
+// result is identical.
 func checkSchema(m *Message, out map[string]any) bool {
-	b, err := marshalCanonical(MessageToAny(m))
-	if err != nil {
-		out["schema_ok"] = false
-		out["schema_error"] = "marshal: " + err.Error()
-		return false
-	}
-	var parsed any
-	if err := json.Unmarshal(b, &parsed); err != nil {
-		out["schema_ok"] = false
-		out["schema_error"] = "unmarshal: " + err.Error()
-		return false
-	}
-	if err := schemaValidateErr(parsed, m.V); err != nil {
+	if err := schemaValidateErr(MessageToAny(m), m.V); err != nil {
 		out["schema_ok"] = false
 		out["schema_error"] = err.Error()
 		return false

@@ -65,6 +65,11 @@ type Registry struct {
 	entries map[string]*CardEntry // card.ID -> entry
 	byAgent map[string]string     // "tenant|agent" -> current card.ID
 	byCap   map[string][]string   // "tenant|cap|version" -> card.IDs
+	// pubKeys caches the decoded ed25519 public key of the CURRENT card of
+	// each (tenant, agent), so message verification does not re-decode the
+	// base64 key on every message. Invalid keys are NOT cached (a corrected
+	// re-publish must take effect).
+	pubKeys map[string]ed25519.PublicKey
 }
 
 func NewRegistry() *Registry {
@@ -72,6 +77,7 @@ func NewRegistry() *Registry {
 		entries: map[string]*CardEntry{},
 		byAgent: map[string]string{},
 		byCap:   map[string][]string{},
+		pubKeys: map[string]ed25519.PublicKey{},
 	}
 }
 
@@ -114,6 +120,12 @@ func (r *Registry) Publish(c *Card, publisher string, ts time.Time) error {
 	for _, cap := range c.Provides {
 		k := capKey(c.Tenant, cap.Name, cap.Version)
 		r.byCap[k] = append(r.byCap[k], c.ID)
+	}
+	// refresh the decoded-key cache for this (tenant, agent)
+	if pub, err := base64.StdEncoding.DecodeString(c.Pub.Key); err == nil && len(pub) == ed25519.PublicKeySize {
+		r.pubKeys[agentKey(c.Tenant, c.Agent)] = ed25519.PublicKey(pub)
+	} else {
+		delete(r.pubKeys, agentKey(c.Tenant, c.Agent))
 	}
 	return nil
 }
@@ -166,14 +178,20 @@ func (r *Registry) VerifyMessageWithCard(m *Message) (bool, string) {
 	if card.Revoked {
 		return false, "revoked card: " + tenant + "/" + m.From.ID
 	}
-	rawPub, err := base64.StdEncoding.DecodeString(card.Pub.Key)
-	if err != nil {
-		return false, "card: invalid base64 public key"
+	r.mu.RLock()
+	pub, ok2 := r.pubKeys[agentKey(tenant, m.From.ID)]
+	r.mu.RUnlock()
+	if !ok2 {
+		rawPub, err := base64.StdEncoding.DecodeString(card.Pub.Key)
+		if err != nil {
+			return false, "card: invalid base64 public key"
+		}
+		if len(rawPub) != ed25519.PublicKeySize {
+			return false, "card: invalid public key"
+		}
+		pub = ed25519.PublicKey(rawPub)
 	}
-	if len(rawPub) != ed25519.PublicKeySize {
-		return false, "card: invalid public key"
-	}
-	return VerifyWithKey(m, ed25519.PublicKey(rawPub))
+	return VerifyWithKey(m, pub)
 }
 
 // Discover returns cards (tenant-scoped, verified, not revoked) that offer
@@ -272,6 +290,7 @@ func (r *Registry) Unmarshal(b []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.entries, r.byAgent, r.byCap = fresh.entries, fresh.byAgent, fresh.byCap
+	r.pubKeys = fresh.pubKeys
 	return nil
 }
 

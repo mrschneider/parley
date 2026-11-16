@@ -27,19 +27,36 @@ from typing import Any
 
 # ---------------------------------------------------------------- ed25519 / hmac
 try:
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey, Ed25519PublicKey)
     from cryptography.hazmat.primitives import serialization
     _HAVE_ED25519 = True
 except Exception:
+    Ed25519PublicKey = None  # type: ignore[assignment]
     _HAVE_ED25519 = False
+
+# Derived test keys are deterministic (identity -> key), so they can be
+# cached: sign/verify are hot paths and re-deriving (sha256 + key
+# construction) on every call wasted ~100us per operation.
+_derived_key_cache: dict[tuple[str, str], tuple] = {}
+_derived_key_cache_max = 4096
 
 def _derive_key(agent_id: str, tenant: str = "default"):
     """Deterministic test key derived from the identity.
     Production: use a KMS / real key wallet — NEVER derive from an id."""
+    k = (tenant, agent_id)
+    cached = _derived_key_cache.get(k)
+    if cached is not None:
+        return cached
     seed = hashlib.sha256(f"{tenant}:{agent_id}".encode()).digest()
     if _HAVE_ED25519:
-        return ("ed25519", Ed25519PrivateKey.from_private_bytes(seed))
-    return ("hmac-sha256", seed)
+        val: tuple = ("ed25519", Ed25519PrivateKey.from_private_bytes(seed))
+    else:
+        val = ("hmac-sha256", seed)
+    if len(_derived_key_cache) >= _derived_key_cache_max:
+        _derived_key_cache.clear()
+    _derived_key_cache[k] = val
+    return val
 
 class KeyStore:
     """Wallet of real ed25519 keys (production path).
@@ -131,7 +148,11 @@ class KeyStore:
 # ids and signatures) platform-independent.
 
 def canonical_json(v) -> str:
-    """Canonical serialization of any JSON value (canonical number rule)."""
+    """Canonical serialization of any JSON value (canonical number rule).
+
+    Recursive; container joins use list comprehensions (faster than the
+    original generator expressions inside str.join).
+    """
     if v is None:
         return "null"
     if v is True:
@@ -148,10 +169,10 @@ def canonical_json(v) -> str:
         return json.dumps(v, ensure_ascii=False)
     if isinstance(v, dict):
         return "{" + ",".join(
-            json.dumps(k, ensure_ascii=False) + ":" + canonical_json(v[k])
-            for k in sorted(v)) + "}"
+            [json.dumps(k, ensure_ascii=False) + ":" + canonical_json(v[k])
+             for k in sorted(v)]) + "}"
     if isinstance(v, (list, tuple)):
-        return "[" + ",".join(canonical_json(x) for x in v) + "]"
+        return "[" + ",".join([canonical_json(x) for x in v]) + "]"
     raise TypeError(f"value not canonically serializable: {type(v)!r}")
 
 def canonical_bytes(msg: dict) -> bytes:
@@ -232,7 +253,6 @@ def verify(msg: dict) -> tuple[bool, str]:
         except Exception:
             raw_pub = b""
         if len(raw_pub) == 32:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
             try:
                 Ed25519PublicKey.from_public_bytes(raw_pub).verify(
                     base64.b64decode(sig["sig"]), data)
@@ -258,9 +278,20 @@ def verify(msg: dict) -> tuple[bool, str]:
 # ---------------------------------------------------------------- lexer/parser
 ACTS = {"inform", "ask", "request", "propose", "accept", "reject", "counter",
         "commit", "delegate", "verify", "cancel"}
+ACTS_UPPER = frozenset(a.upper() for a in ACTS)
 OPS = {"<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "==": "eq", "=": "eq",
        "in": "in", "not_null": "not_null", "~": "regex"}
 HEADER_RE = re.compile(r"^([A-Za-z_][\w-]*)\s*->\s*([A-Za-z_][\w-]*)$")
+# Grammar patterns are compiled ONCE at import time (the parser matches them
+# per line; re.compile per call was a measurable cost on larger documents).
+AGENT_RE = re.compile(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', re.I)
+PROVIDES_RE = re.compile(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', re.I)
+IO_RE = re.compile(r'^INPUT\s+(\w+)\s*:\s*(\w+)$|^OUTPUT\s+(\w+)\s*:\s*(\w+)$', re.I)
+COST_RE = re.compile(r'^COST\s+(\w+)\s*(<=|>=|<|>|==)\s*(.+)$', re.I)
+EXPECT_WEIGHT_RE = re.compile(r"\s+W\s+(\d+(\.\d+)?)\s*$", re.I)
+EXPECT_CLAUSE_RE = re.compile(r"^([A-Za-z_][\w.]*)\s*(<=|>=|<|>|==|in|not_null|~)\s*(.+)$")
+INT_RE = re.compile(r"-?\d+\Z")
+FLOAT_RE = re.compile(r"-?\d+\.\d+\Z")
 
 def parse_value(s: str):
     s = s.strip()
@@ -278,29 +309,36 @@ def parse_value(s: str):
         return True
     if s.lower() == "false":
         return False
-    if re.fullmatch(r"-?\d+", s):
+    if INT_RE.fullmatch(s):
         return int(s)
-    if re.fullmatch(r"-?\d+\.\d+", s):
+    if FLOAT_RE.fullmatch(s):
         return float(s)
     return s
 
 def split_top(s: str, sep: str = ",") -> list[str]:
-    parts, depth, cur, in_str = [], 0, [], False
-    for ch in s:
+    """Splits s on top-level sep (ignoring brackets and double-quoted strings).
+    Index slicing — O(n) without per-character list building."""
+    parts: list[str] = []
+    depth = 0
+    in_str = False
+    start = 0
+    for i, ch in enumerate(s):
         if ch == '"':
             in_str = not in_str
-        if not in_str:
+        elif not in_str:
             if ch in "[{":
                 depth += 1
             elif ch in "]}":
                 depth -= 1
-        if ch == sep and depth == 0 and not in_str:
-            parts.append("".join(cur)); cur = []
-        else:
-            cur.append(ch)
-    if "".join(cur).strip():
-        parts.append("".join(cur))
-    return [p.strip() for p in parts if p.strip()]
+            elif ch == sep and depth == 0:
+                p = s[start:i].strip()
+                if p:
+                    parts.append(p)
+                start = i + 1
+    tail = s[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 class ParleyDoc:
     def __init__(self):
@@ -335,14 +373,14 @@ def parse_text(src: str) -> ParleyDoc:
 
         # ---- capability declarations -------------------------------------
         if first == "AGENT":
-            m = re.match(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', s, re.I)
+            m = AGENT_RE.match(s)
             if not m:
                 raise SyntaxError(f"ln {ln}: malformed AGENT: {s}")
             cur_agent = m.group(2)
             doc.agents[cur_agent] = {"id": m.group(1), "provides": []}
             continue
         if first == "PROVIDES":
-            m = re.match(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', s, re.I)
+            m = PROVIDES_RE.match(s)
             if not m or not cur_agent:
                 raise SyntaxError(f"ln {ln}: malformed PROVIDES: {s}")
             cur_prov = m.group(1)
@@ -354,7 +392,7 @@ def parse_text(src: str) -> ParleyDoc:
             doc.agents[cur_agent]["provides"].append(cur_prov)
             continue
         if first in ("INPUT", "OUTPUT") and cur_prov:
-            m = re.match(r'^INPUT\s+(\w+)\s*:\s*(\w+)$|^OUTPUT\s+(\w+)\s*:\s*(\w+)$', s, re.I)
+            m = IO_RE.match(s)
             if not m:
                 raise SyntaxError(f"ln {ln}: malformed INPUT/OUTPUT: {s}")
             kind = "inputs" if first == "INPUT" else "outputs"
@@ -363,7 +401,7 @@ def parse_text(src: str) -> ParleyDoc:
             doc.capabilities[cur_prov][kind].append({"name": name, "type": typ.upper()})
             continue
         if first == "COST" and cur_prov:
-            m = re.match(r'^COST\s+(\w+)\s*(<=|>=|<|>|==)\s*(.+)$', s, re.I)
+            m = COST_RE.match(s)
             if not m:
                 raise SyntaxError(f"ln {ln}: malformed COST: {s}")
             doc.capabilities[cur_prov]["cost"].append(
@@ -382,7 +420,7 @@ def parse_text(src: str) -> ParleyDoc:
             raise SyntaxError(f"ln {ln}: line out of context (agent/message): {s}")
         m = cur_msg
 
-        if first in {a.upper() for a in ACTS}:
+        if first in ACTS_UPPER:
             rest = s.split(None, 1)[1].strip() if " " in s else ""
             m["act"] = first.lower()
             if rest:
@@ -427,14 +465,14 @@ def parse_text(src: str) -> ParleyDoc:
             rest = s[len("EXPECT"):].strip()
             clause: dict = {}
             weight = 1.0
-            wm = re.search(r"\s+W\s+(\d+(\.\d+)?)\s*$", rest, re.I)
+            wm = EXPECT_WEIGHT_RE.search(rest)
             if wm:
                 weight = float(wm.group(1))
                 rest = rest[: wm.start()]
             if rest.upper().startswith("NL "):
                 clause["nl"] = parse_value(rest[3:])
             else:
-                cm = re.match(r"^([A-Za-z_][\w.]*)\s*(<=|>=|<|>|==|in|not_null|~)\s*(.+)$", rest)
+                cm = EXPECT_CLAUSE_RE.match(rest)
                 if not cm:
                     raise SyntaxError(f"ln {ln}: malformed EXPECT: {s}")
                 clause["check"] = {"field": cm.group(1), "op": OPS[cm.group(2)],
@@ -472,6 +510,27 @@ def finalize(doc: ParleyDoc) -> list[dict]:
     return doc.messages
 
 # ---------------------------------------------------------------- validation
+_SCHEMA_VALIDATOR_CACHE: dict[int, "tuple[dict, Any]"] = {}
+
+def _load_schema_validator(v: int):
+    """Loads and compiles the canonical schema for message version v,
+    caching the (schema, validator) pair. The previous implementation
+    re-read and re-parsed the schema file on EVERY validate() call — the
+    single most expensive part of validation (I/O + json parse dominate
+    over the validation itself)."""
+    key = 1 if v >= 1 else 0
+    cached = _SCHEMA_VALIDATOR_CACHE.get(key)
+    if cached is not None:
+        return cached
+    from jsonschema import Draft202012Validator
+    schema_path = __file__.replace(
+        "parley.py", f"schema/parley-v{key}.schema.json")
+    with open(schema_path, encoding="utf-8") as f:
+        schema = json.load(f)
+    Draft202012Validator.check_schema(schema)
+    entry = (schema, Draft202012Validator(schema))
+    _SCHEMA_VALIDATOR_CACHE[key] = entry
+    return entry
 def get_path(obj: dict, path: str):
     cur = obj
     for part in path.split("."):
@@ -554,13 +613,14 @@ def rank_proposals(parent: dict, proposals: list[dict]) -> dict:
             continue
         e = {"proposal": p, "score": 0.0, "satisfied": [], "violations": [], "detail": []}
         satisfied, any_violation = 0.0, False
+        accepted = set(p.get("clauses", []))
         for c in parent.get("expect", []):
             w = c.get("weight", 0.0)
             if w <= 0:
                 continue  # inactive clause
             if "nl" in c:
                 cid = c.get("id", "?")
-                ok = cid in set(p.get("clauses", []))
+                ok = cid in accepted
                 detail = "nl explicitly accepted (binding)" if ok \
                     else "nl not explicitly accepted -> non-binding (penalty)"
             else:
@@ -753,7 +813,6 @@ def verify_agreement(agr: dict) -> tuple[bool, str]:
             return False, f"missing signature: {agent}"
         if not _HAVE_ED25519:
             return False, "cryptography not available for ed25519"
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         raw_pub = base64.b64decode(sig["key"])
         try:
             Ed25519PublicKey.from_public_bytes(raw_pub).verify(
@@ -764,14 +823,12 @@ def verify_agreement(agr: dict) -> tuple[bool, str]:
 
 def validate(msg: dict, parent: dict | None = None, now: datetime | None = None) -> dict:
     """Returns {schema_ok, signature_ok, sig_msg, tenant_ok, clauses: [...], warnings: [...]}. """
-    from jsonschema import validate as jsval, ValidationError
+    from jsonschema import ValidationError
     out = {"id": msg.get("id"), "act": msg.get("act"), "warnings": []}
 
-    schema_path = __file__.replace(
-        "parley.py", f"schema/parley-v{'1' if int(msg.get('v', 0) or 0) >= 1 else '0'}.schema.json")
-    schema = json.load(open(schema_path))
+    schema, validator = _load_schema_validator(int(msg.get("v", 0) or 0))
     try:
-        jsval(msg, schema)
+        validator.validate(msg)
         out["schema_ok"] = True
     except ValidationError as e:
         out["schema_ok"] = False

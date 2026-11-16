@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.3.0] - 2026-11-16
 
 ### Changed
 - **Repository translated to English**: docs, templates, code comments,
@@ -15,6 +15,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`interop-py`, `interop-id`, `interop-ranking`) regenerated from
   English content with matching canonical bytes, content ids and
   signatures; Python/Go diagnostics use the same English glossary.
+- **Performance pass (Python + Go SDK)** — canonical bytes, ids and
+  signatures are byte-identical before/after (interop tests + fuzz).
+
+### Added
+- **Benchmarks**: `bench_perf.py` (Python hot paths) and
+  `sdk/go/bench_test.go` / `sdk/go/transport/bench_test.go` (Go), for
+  before/after regression tracking.
+
+### Performance highlights
+- **Python `validate()`**: the canonical schema is now compiled once per
+  version and cached — every call no longer re-reads and re-parses the
+  schema file: **14.6 ms -> ~0.19 ms (~77x)**.
+- **Python `parse_text`**: grammar regexes compiled once at import and a
+  precomputed `ACTS` set: **1.29 ms -> 0.87 ms (~1.5x)**; `split_top`
+  rewritten with index slicing (~1.2x).
+- **Python `sign`/`verify`**: derived test keys are cached (deterministic
+  per identity): **~1.6x / ~1.3x**.
+- **Python `canonical_json`**: list-comprehension container joins:
+  ~1.2x; LSP `analyze` ~1.3x with precompiled regexes, hoisted agent-id
+  set and an early break in `context_at`.
+- **Go `checkSchema`**: validates the `MessageToAny` tree directly — the
+  canonical-marshal + `json.Unmarshal` round trip (a "pure JSON" shim) is
+  gone; the jsonschema library compares numbers by value, so results are
+  identical.
+- **Go `Registry`**: decoded ed25519 public keys are cached per
+  (tenant, agent) — `VerifyMessageWithCard` no longer base64-decodes the
+  card key on every message.
+- **Go `Inbox`**: new `offersByParent` index — proposal ranking collects
+  offers in O(offers) instead of scanning the whole store on every
+  delivery (maintained incrementally; rebuilt after retention sweeps and
+  `Load`).
 
 ## [v0.2.0] - 2026-10-25
 

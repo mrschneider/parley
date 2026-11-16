@@ -71,7 +71,11 @@ type Inbox struct {
 	storePath string
 	contracts map[string]*parley.Capability
 	threads   map[string]*parley.Thread // root (request) id -> thread
-	retention RetentionPolicy
+	// offersByParent indexes the stored offers (propose/counter) by parent
+	// id, so ranking collects them in O(offers) instead of scanning the
+	// whole store on every delivery.
+	offersByParent map[string][]*parley.Message
+	retention      RetentionPolicy
 }
 
 // RetentionPolicy bounds inbox memory. Zero values disable each bound.
@@ -83,12 +87,13 @@ type RetentionPolicy struct {
 // NewInbox builds an inbox.
 func NewInbox(opts ...Option) *Inbox {
 	in := &Inbox{
-		seen:    map[string]bool{},
-		seenAt:  map[string]time.Time{},
-		store:   map[string]*parley.Message{},
-		verify:  parley.Verify,
-		now:     time.Now,
-		threads: map[string]*parley.Thread{},
+		seen:           map[string]bool{},
+		seenAt:         map[string]time.Time{},
+		store:          map[string]*parley.Message{},
+		verify:         parley.Verify,
+		now:            time.Now,
+		threads:        map[string]*parley.Thread{},
+		offersByParent: map[string][]*parley.Message{},
 	}
 	for _, o := range opts {
 		o(in)
@@ -163,8 +168,24 @@ func (in *Inbox) sweepLocked(now time.Time) []string {
 		delete(in.threads, id)
 		removed = append(removed, id)
 	}
+	// offersByParent entries may reference evicted messages (pointers from
+	// the store snapshot); rebuild the index for the surviving messages.
+	in.rebuildOffersIndexLocked()
 	sort.Strings(removed)
 	return removed
+}
+
+// rebuildOffersIndexLocked recomputes offersByParent from the store.
+// Called after bulk eviction (sweep); normal delivery maintains the index
+// incrementally. Caller must hold in.mu.
+func (in *Inbox) rebuildOffersIndexLocked() {
+	idx := map[string][]*parley.Message{}
+	for _, m := range in.store {
+		if m.Parent != "" && (m.Act == "propose" || m.Act == "counter") {
+			idx[m.Parent] = append(idx[m.Parent], m)
+		}
+	}
+	in.offersByParent = idx
 }
 
 // WithContracts supplies the capability contracts (name -> declaration)
@@ -280,15 +301,14 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 	// 8) proposal ranking: when this message is an offer (propose/counter)
 	// and the parent request is known, rank it (and the other stored
 	// offers of the same thread) by the parent's clause weights. The
-	// current message is included explicitly (it is stored below).
+	// current message is included explicitly (it is stored below). The
+	// offers are read from the offersByParent index (O(offers), not an
+	// O(store) scan).
 	if isContractAct(m.Act) && m.Parent != "" {
 		if parent, ok := in.store[m.Parent]; ok && parent.Act == "request" && len(parent.Expect) > 0 {
-			var offers []*parley.Message
-			for _, sm := range in.store {
-				if sm.Parent == m.Parent && (sm.Act == "propose" || sm.Act == "counter") {
-					offers = append(offers, sm)
-				}
-			}
+			stored := in.offersByParent[m.Parent]
+			offers := make([]*parley.Message, 0, len(stored)+1)
+			offers = append(offers, stored...)
 			offers = append(offers, &m)
 			if rk := parley.RankProposals(parent, offers); rk.Top != nil {
 				res.Validation = mergeValidation(res.Validation, map[string]any{
@@ -300,6 +320,9 @@ func (in *Inbox) Deliver(raw []byte) *Result {
 	in.seen[m.ID] = true
 	in.seenAt[m.ID] = in.now()
 	in.store[m.ID] = &m
+	if m.Parent != "" && (m.Act == "propose" || m.Act == "counter") {
+		in.offersByParent[m.Parent] = append(in.offersByParent[m.Parent], &m)
+	}
 	in.sweepLocked(in.now())
 	needSave := in.storePath != ""
 	in.mu.Unlock()
@@ -359,16 +382,14 @@ func (in *Inbox) RankProposals(rootID string) *parley.Ranking {
 		in.mu.Unlock()
 		return nil
 	}
-	var offers []*parley.Message
-	for _, sm := range in.store {
-		if sm.Parent == rootID && (sm.Act == "propose" || sm.Act == "counter") {
-			offers = append(offers, sm)
-		}
-	}
-	in.mu.Unlock()
-	if len(offers) == 0 {
+	stored := in.offersByParent[rootID]
+	if len(stored) == 0 {
+		in.mu.Unlock()
 		return nil
 	}
+	offers := make([]*parley.Message, len(stored))
+	copy(offers, stored)
+	in.mu.Unlock()
 	return parley.RankProposals(parent, offers)
 }
 
@@ -442,6 +463,7 @@ func (in *Inbox) Load() error {
 		}
 		in.store[m.ID] = &m
 	}
+	in.rebuildOffersIndexLocked()
 	return nil
 }
 

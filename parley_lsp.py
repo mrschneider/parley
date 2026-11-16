@@ -43,6 +43,12 @@ MSG_KW = ({a.upper() for a in ACTS} |
 CAP_NAME_RE = re.compile(r"^[a-z][a-z0-9_.]*\.[a-z][a-z0-9_.]*$")
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$")
 MSGREF_RE = re.compile(r"^@msg(\d+)$")
+# Grammar patterns compiled once at import time (analyze() runs on every
+# keystroke; per-line re.match was a measurable cost on larger documents).
+AGENT_RE = re.compile(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', re.I)
+PROVIDES_RE = re.compile(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', re.I)
+EXPECT_WEIGHT_RE = re.compile(r"\s+W\s+(\d+(\.\d+)?)\s*$", re.I)
+HOVER_WORD_RE = re.compile(r'[\w.@:.-]+')
 
 KW_DOCS = {
     "AGENT": "Declares an agent and its local alias.\n`agent \"stable-id\" as ALIAS`",
@@ -120,6 +126,7 @@ class Model:
     def semantic(self, doc, messages):
         """High-value semantic checks over the successfully parsed doc."""
         n = len(doc.messages)
+        agent_ids = {a["id"] for a in self.agents.values()}
         for i, m in enumerate(doc.messages, 1):
             line = messages[i - 1]["line"] if i - 1 < len(messages) else 0
             # @msgN out of range -> finalize() would raise IndexError
@@ -131,7 +138,7 @@ class Model:
                              "semref", 1)
             fb = m.get("fallback", {})
             fb_id = fb.get("to", {}).get("id", "")
-            if fb_id and fb_id not in {a["id"] for a in self.agents.values()}:
+            if fb_id and fb_id not in agent_ids:
                 self.err(line, fb_id,
                          f"fallback to undeclared agent: {fb_id!r}",
                          "unknown-fallback", 2)
@@ -182,7 +189,7 @@ def analyze(src: str) -> Model:
         first = stripped.split(None, 1)[0].upper()
 
         if first == "AGENT":
-            m = re.match(r'^AGENT\s+"([^"]+)"\s+AS\s+([A-Za-z_][\w-]*)$', stripped, re.I)
+            m = AGENT_RE.match(stripped)
             if not m:
                 model.err(i, stripped, "malformed AGENT (expected: agent \"id\" as ALIAS)",
                           "bad-agent")
@@ -193,7 +200,7 @@ def analyze(src: str) -> Model:
             continue
 
         if first == "PROVIDES":
-            m = re.match(r'^PROVIDES\s+"?([a-z0-9_.]+)"?\s+V(\d+)$', stripped, re.I)
+            m = PROVIDES_RE.match(stripped)
             if not m:
                 model.err(i, stripped, "malformed PROVIDES (expected: provides \"name\" vN)")
                 cur_cap = None
@@ -243,7 +250,7 @@ def analyze(src: str) -> Model:
                           "unknown-token")
             elif first == "EXPECT":
                 rest = stripped[len("EXPECT"):].strip()
-                wm = re.search(r"\s+W\s+(\d+(\.\d+)?)\s*$", rest, re.I)
+                wm = EXPECT_WEIGHT_RE.search(rest)
                 if wm:
                     try:
                         w = float(wm.group(1))
@@ -294,7 +301,8 @@ def context_at(model: Model, line_idx: int) -> dict:
     """Line context: top | capability | message (for completion).
 
     Rule: the last BLOCK opened before the line (agent/provides/message,
-    in temporal order) determines the context.
+    in temporal order) determines the context. Single pass over the
+    block start lines with an early break at line_idx.
     """
     blocks = []
     for name, c in model.caps.items():
@@ -306,13 +314,14 @@ def context_at(model: Model, line_idx: int) -> dict:
     blocks.sort()
     ctx = {"kind": "top", "cap": None}
     for line, kind, name in blocks:
-        if line <= line_idx:
-            if kind == "capability":
-                ctx = {"kind": "capability", "cap": name}
-            elif kind == "message":
-                ctx = {"kind": "message"}
-            else:  # agent: keeps the previous neutral block (top)
-                ctx = {"kind": "top", "cap": None}
+        if line > line_idx:
+            break
+        if kind == "capability":
+            ctx = {"kind": "capability", "cap": name}
+        elif kind == "message":
+            ctx = {"kind": "message"}
+        else:  # agent: keeps the previous neutral block (top)
+            ctx = {"kind": "top", "cap": None}
     return ctx
 
 
@@ -473,7 +482,7 @@ class Server:
         line = lines[pos["line"]] if pos["line"] < len(lines) else ""
         col = pos["character"]
         word = None
-        for mm in re.finditer(r'[\w.@:.-]+', line):
+        for mm in HOVER_WORD_RE.finditer(line):
             if mm.start() <= col <= mm.end():
                 word = mm.group(0)
                 break
